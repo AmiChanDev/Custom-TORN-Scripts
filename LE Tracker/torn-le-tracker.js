@@ -1,4 +1,4 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         Torn LE Tracker
 // @namespace    torn-LE-tracker
 // @version      3.2.0
@@ -15,12 +15,13 @@
   "use strict";
 
   const STORE_KEY = "tlet:v1";
-  const LEGACY_STORE_KEY = "tlpt:v1";
+  const LEGACY_STORE_KEY = "tlet:v1";
   const API_BASE = "https://api.torn.com/v2";
   const API_V1_BASE = "https://api.torn.com";
   const DEFAULT_RATE = 350000;
   const DEFAULT_ESCAPE_RATE = 600000;
   const DEFAULT_LOOKBACK_DAYS = 30;
+  const DEFAULT_ROW_LIMIT = 1000;
   const DEFAULT_SOURCE_CODES = ["BHG", "NST"];
 
   const state = loadState();
@@ -38,7 +39,7 @@
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Sora:wght@400;600;700&display=swap');
 
     /* ── Toggle Tab ── */
-    #tlpt-toggle {
+    #tlet-toggle {
       position: fixed; right: 0; top: 50%; transform: translateY(-50%);
       z-index: 999998; width: 22px; height: 64px; border: 0;
       border-radius: 6px 0 0 6px; background: #1a1a18; color: #c8c5b8;
@@ -47,11 +48,11 @@
       writing-mode: vertical-rl; text-orientation: mixed;
       transition: right .22s cubic-bezier(.2,.8,.2,1), background .15s, color .15s;
     }
-    #tlpt-toggle:hover { background: #252522; color: #f0efe8; }
-    #tlpt-toggle.tlpt-attached { right: min(420px, calc(100vw - 40px)); z-index: 1000000; }
+    #tlet-toggle:hover { background: #252522; color: #f0efe8; }
+    #tlet-toggle.tlet-attached { right: min(420px, calc(100vw - 40px)); z-index: 1000000; }
 
     /* ── Panel Shell ── */
-    #tlpt-panel {
+    #tlet-panel {
       position: fixed; right: 0; top: 0; bottom: 0; z-index: 999999;
       width: min(420px, calc(100vw - 32px)); display: flex; flex-direction: column;
       background: #181816; color: #e8e6de;
@@ -60,277 +61,277 @@
       transition: transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s linear .22s;
       will-change: transform;
     }
-    #tlpt-panel.tlpt-open {
+    #tlet-panel.tlet-open {
       transform: translateX(0); visibility: visible; pointer-events: auto;
       transition: transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s;
     }
-    #tlpt-panel, #tlpt-panel * {
+    #tlet-panel, #tlet-panel * {
       font-family: 'Sora', sans-serif !important; text-shadow: none !important; box-sizing: border-box;
     }
 
     /* ── Header ── */
-    .tlpt-head {
+    .tlet-head {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 12px; border-bottom: 1px solid #2a2a27;
       background: #111110; flex-shrink: 0;
     }
-    .tlpt-title { font-size: 15px; font-weight: 700; color: #f0efe8; letter-spacing: -.2px; }
-    .tlpt-head-actions { display: flex; gap: 5px; align-items: center; }
+    .tlet-title { font-size: 15px; font-weight: 700; color: #f0efe8; letter-spacing: -.2px; }
+    .tlet-head-actions { display: flex; gap: 5px; align-items: center; }
 
     /* ── Buttons ── */
-    .tlpt-btn, .tlpt-icon-btn {
+    .tlet-btn, .tlet-icon-btn {
       border: 1px solid #333330; border-radius: 5px; background: #222220;
       color: #d8d6ce; cursor: pointer; font: 600 12px 'Sora', sans-serif;
       transition: background .12s, color .12s, border-color .12s;
     }
-    .tlpt-btn { height: 28px; padding: 0 11px; }
-    .tlpt-icon-btn { width: 28px; height: 28px; font-size: 14px; display: flex; align-items: center; justify-content: center; }
-    .tlpt-btn:hover, .tlpt-icon-btn:hover { background: #2e2e2b; color: #f0efe8; }
-    .tlpt-icon-btn.active { background: #2a2a27; border-color: #555550; color: #f0efe8; }
+    .tlet-btn { height: 28px; padding: 0 11px; }
+    .tlet-icon-btn { width: 28px; height: 28px; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+    .tlet-btn:hover, .tlet-icon-btn:hover { background: #2e2e2b; color: #f0efe8; }
+    .tlet-icon-btn.active { background: #2a2a27; border-color: #555550; color: #f0efe8; }
 
     /* ── Settings Drawer ── */
-    .tlpt-settings {
+    .tlet-settings {
       display: none; flex-direction: column; gap: 0;
       border-bottom: 1px solid #2a2a27; background: #0e0e0d; flex-shrink: 0;
     }
-    .tlpt-settings.open { display: flex; }
+    .tlet-settings.open { display: flex; }
 
-    .tlpt-settings-inner {
+    .tlet-settings-inner {
       padding: 10px 12px 12px;
       display: flex; flex-direction: column; gap: 8px;
     }
 
-    .tlpt-settings-title {
+    .tlet-settings-title {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: .8px; color: #555550; padding-bottom: 2px;
     }
 
-    .tlpt-field label {
+    .tlet-field label {
       display: block; margin-bottom: 3px; color: #888680;
       font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
     }
-    .tlpt-input {
+    .tlet-input {
       width: 100%; height: 28px; border: 1px solid #2e2e2b; border-radius: 5px;
       background: #1a1a18; color: #e8e6de; padding: 0 7px;
       font: 600 12px 'Sora', sans-serif; transition: border-color .12s;
     }
-    .tlpt-input:focus { outline: none; border-color: #555550; }
-    .tlpt-input[type="password"] { font-weight: 400; letter-spacing: 2px; }
-    .tlpt-input::placeholder { color: #444440; font-weight: 400; letter-spacing: 0; }
+    .tlet-input:focus { outline: none; border-color: #555550; }
+    .tlet-input[type="password"] { font-weight: 400; letter-spacing: 2px; }
+    .tlet-input::placeholder { color: #444440; font-weight: 400; letter-spacing: 0; }
 
-    .tlpt-key-row { display: flex; gap: 6px; align-items: end; }
-    .tlpt-key-row .tlpt-field { flex: 1; }
-    .tlpt-backup-row, .tlpt-source-manage-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .tlpt-source-manage-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .tlet-key-row { display: flex; gap: 6px; align-items: end; }
+    .tlet-key-row .tlet-field { flex: 1; }
+    .tlet-backup-row, .tlet-source-manage-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .tlet-source-manage-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
-    .tlpt-key-status {
+    .tlet-key-status {
       font-size: 11px; font-weight: 600; padding: 3px 0;
       height: 18px; display: flex; align-items: center; gap: 5px;
     }
-    .tlpt-key-dot {
+    .tlet-key-dot {
       width: 6px; height: 6px; border-radius: 50%; background: #444440; flex-shrink: 0;
     }
-    .tlpt-key-dot.set { background: #5ec47a; }
-    .tlpt-key-text { color: #666460; }
+    .tlet-key-dot.set { background: #5ec47a; }
+    .tlet-key-text { color: #666460; }
 
     /* ── Config Bar ── */
-    .tlpt-config {
-      display: grid; grid-template-columns: 1fr 96px 106px 58px;
+    .tlet-config {
+      display: grid; grid-template-columns: 72px 96px 106px 32px;
       gap: 6px; padding: 8px 12px; border-bottom: 1px solid #2a2a27;
       background: #111110; flex-shrink: 0; align-items: end;
     }
 
     /* ── Summary Bar ── */
-    .tlpt-summary {
+    .tlet-summary {
       display: grid; grid-template-columns: repeat(4, 1fr);
       border-bottom: 1px solid #2a2a27; flex-shrink: 0;
     }
-    .tlpt-stat { padding: 7px 10px; border-right: 1px solid #2a2a27; }
-    .tlpt-stat:last-child { border-right: 0; }
-    .tlpt-stat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: #555550; }
-    .tlpt-stat-value {
+    .tlet-stat { padding: 7px 10px; border-right: 1px solid #2a2a27; }
+    .tlet-stat:last-child { border-right: 0; }
+    .tlet-stat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: #555550; }
+    .tlet-stat-value {
       font: 700 13px/1.25 'JetBrains Mono', monospace !important;
       color: #e8e6de; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px;
     }
-    #tlpt-outstanding { color: #e8a020; }
-    #tlpt-paid-stat   { color: #5ec47a; }
+    #tlet-outstanding { color: #e8a020; }
+    #tlet-paid-stat   { color: #5ec47a; }
 
     /* ── View Tabs ── */
-    .tlpt-view-tabs {
+    .tlet-view-tabs {
       display: grid; grid-template-columns: repeat(3, 1fr);
       gap: 6px; padding: 8px 12px; border-bottom: 1px solid #2a2a27;
       background: #111110; flex-shrink: 0;
     }
-    .tlpt-view-tab {
+    .tlet-view-tab {
       height: 28px; border: 1px solid #333330; border-radius: 5px;
       background: #1b1b19; color: #77746c; cursor: pointer;
       font: 700 11px 'Sora', sans-serif !important; text-transform: uppercase;
       letter-spacing: .5px;
     }
-    .tlpt-view-tab:hover { background: #252522; color: #d8d6ce; }
-    .tlpt-view-tab.active { background: #2a2a27; color: #f0efe8; border-color: #555550; }
+    .tlet-view-tab:hover { background: #252522; color: #d8d6ce; }
+    .tlet-view-tab.active { background: #2a2a27; color: #f0efe8; border-color: #555550; }
 
     /* ── Filters and Bulk Actions ── */
-    .tlpt-filter-bar {
+    .tlet-filter-bar {
       display: grid; grid-template-columns: 1fr 92px; gap: 6px;
       padding: 8px 12px; border-bottom: 1px solid #2a2a27;
       background: #111110; flex-shrink: 0;
     }
-    .tlpt-bulk-bar {
+    .tlet-bulk-bar {
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
       padding: 0 12px 8px; border-bottom: 1px solid #2a2a27;
       background: #111110; flex-shrink: 0;
     }
-    .tlpt-btn.danger { background: #321616; color: #f0a0a0; }
-    .tlpt-btn.success { background: #16321f; color: #5ec47a; }
-    .tlpt-btn.blue { background: #162535; color: #90c0f0; }
+    .tlet-btn.danger { background: #321616; color: #f0a0a0; }
+    .tlet-btn.success { background: #16321f; color: #5ec47a; }
+    .tlet-btn.blue { background: #162535; color: #90c0f0; }
 
     /* ── Due Banner ── */
-    .tlpt-due {
+    .tlet-due {
       padding: 5px 12px; border-bottom: 1px solid #2a2a27;
       font-size: 12px; font-weight: 600; color: #666460; flex-shrink: 0;
     }
-    .tlpt-due-amount { color: #e8a020; font-weight: 700; font-family: 'JetBrains Mono', monospace !important; }
+    .tlet-due-amount { color: #e8a020; font-weight: 700; font-family: 'JetBrains Mono', monospace !important; }
 
     /* ── Status ── */
-    .tlpt-status {
+    .tlet-status {
       padding: 4px 12px; font-size: 11px; color: #555550;
       border-bottom: 1px solid #2a2a27; flex-shrink: 0; min-height: 20px;
       display: flex; align-items: center;
     }
 
     /* ── Scrollable Body ── */
-    .tlpt-body { overflow-y: auto; flex: 1; }
-    .tlpt-body::-webkit-scrollbar { width: 4px; }
-    .tlpt-body::-webkit-scrollbar-track { background: #111110; }
-    .tlpt-body::-webkit-scrollbar-thumb { background: #333330; border-radius: 2px; }
+    .tlet-body { overflow-y: auto; flex: 1; }
+    .tlet-body::-webkit-scrollbar { width: 4px; }
+    .tlet-body::-webkit-scrollbar-track { background: #111110; }
+    .tlet-body::-webkit-scrollbar-thumb { background: #333330; border-radius: 2px; }
 
     /* ── Date Sections ── */
-    .tlpt-date-section {
+    .tlet-date-section {
       display: flex; align-items: center; justify-content: space-between;
       padding: 8px 12px 6px; background: #111110; border-bottom: 1px solid #242421;
       color: #8d8980; font-size: 10px; font-weight: 700; letter-spacing: .7px;
       text-transform: uppercase; position: sticky; top: 0; z-index: 1;
     }
-    .tlpt-date-total {
+    .tlet-date-total {
       color: #c8c5b8; font: 700 11px 'JetBrains Mono', monospace !important;
       letter-spacing: 0; text-transform: none;
     }
 
     /* ── Contract Row ── */
-    .tlpt-contract { border-bottom: 1px solid #252523; }
-    .tlpt-contract:last-child { border-bottom: 0; }
-    .tlpt-contract:nth-child(odd) .tlpt-contract-head { background: #222220; }
-    .tlpt-contract:nth-child(even) .tlpt-contract-head { background: #262624; }
+    .tlet-contract { border-bottom: 1px solid #252523; }
+    .tlet-contract:last-child { border-bottom: 0; }
+    .tlet-contract:nth-child(odd) .tlet-contract-head { background: #222220; }
+    .tlet-contract:nth-child(even) .tlet-contract-head { background: #262624; }
 
-    .tlpt-contract-head {
+    .tlet-contract-head {
       display: grid; grid-template-columns: 1fr auto auto auto 16px;
       align-items: center; gap: 8px; padding: 9px 12px;
       cursor: pointer; transition: background .1s;
     }
-    .tlpt-contract-head:hover { background: #2d2d2b !important; }
+    .tlet-contract-head:hover { background: #2d2d2b !important; }
 
-    .tlpt-target-name {
+    .tlet-target-name {
       font-size: 13px; font-weight: 700; color: #f0efe8;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .tlpt-target-name a { color: inherit; text-decoration: none; }
-    .tlpt-target-name a:hover { color: #a8b8ff; }
-    .tlpt-target-meta {
+    .tlet-target-name a { color: inherit; text-decoration: none; }
+    .tlet-target-name a:hover { color: #a8b8ff; }
+    .tlet-target-meta {
       font-size: 11px; color: #666460; font-weight: 600; margin-top: 1px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
     /* Pills */
-    .tlpt-pills { display: flex; gap: 3px; align-items: center; }
-    .tlpt-pill {
+    .tlet-pills { display: flex; gap: 3px; align-items: center; }
+    .tlet-pill {
       border-radius: 3px; padding: 2px 5px; font-size: 10px; font-weight: 700;
       font-family: 'JetBrains Mono', monospace !important; letter-spacing: .3px;
     }
-    .tlpt-pill-loss { background: #3a1616; color: #f0a0a0; }
-    .tlpt-pill-esc  { background: #162535; color: #90c0f0; }
+    .tlet-pill-loss { background: #3a1616; color: #f0a0a0; }
+    .tlet-pill-esc  { background: #162535; color: #90c0f0; }
 
     /* Badge */
-    .tlpt-badge {
+    .tlet-badge {
       border-radius: 3px; padding: 2px 6px; font-size: 10px;
       font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
     }
-    .tlpt-badge-paid   { background: #0f2a1a; color: #5ec47a; }
-    .tlpt-badge-unpaid { background: #2a1e04; color: #e8a020; }
+    .tlet-badge-paid   { background: #0f2a1a; color: #5ec47a; }
+    .tlet-badge-unpaid { background: #2a1e04; color: #e8a020; }
 
-    .tlpt-row-amount {
+    .tlet-row-amount {
       font: 700 13px 'JetBrains Mono', monospace !important;
       color: #f0efe8; white-space: nowrap;
     }
-    .tlpt-chevron { color: #444440; font-size: 10px; transition: transform .15s; }
-    .tlpt-chevron.open { transform: rotate(180deg); color: #888680; }
+    .tlet-chevron { color: #444440; font-size: 10px; transition: transform .15s; }
+    .tlet-chevron.open { transform: rotate(180deg); color: #888680; }
 
     /* ── Expanded Body ── */
-    .tlpt-contract-body {
+    .tlet-contract-body {
       display: none; flex-direction: column; gap: 8px;
       padding: 8px 12px 10px; border-top: 1px solid #2a2a27; background: #111110;
     }
-    .tlpt-contract-body.open { display: flex; }
+    .tlet-contract-body.open { display: flex; }
 
-    .tlpt-body-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; align-items: end; }
-    .tlpt-rate-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+    .tlet-body-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; align-items: end; }
+    .tlet-rate-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 
-    .tlpt-mini-input {
+    .tlet-mini-input {
       width: 100%; height: 28px; border: 1px solid #2e2e2b; border-radius: 4px;
       background: #1a1a18; color: #e8e6de; padding: 0 7px;
       font: 600 12px 'JetBrains Mono', monospace !important;
     }
-    .tlpt-mini-input:focus { outline: none; border-color: #555550; }
-    .tlpt-source-select { font-family: 'Sora', sans-serif !important; text-transform: uppercase; }
+    .tlet-mini-input:focus { outline: none; border-color: #555550; }
+    .tlet-source-select { font-family: 'Sora', sans-serif !important; text-transform: uppercase; }
 
-    .tlpt-formula { font: 600 11px 'JetBrains Mono', monospace !important; color: #666460; padding: 3px 0; }
-    .tlpt-formula-total { color: #e8e6de; }
+    .tlet-formula { font: 600 11px 'JetBrains Mono', monospace !important; color: #666460; padding: 3px 0; }
+    .tlet-formula-total { color: #e8e6de; }
 
-    .tlpt-mark-btn {
+    .tlet-mark-btn {
       height: 28px; padding: 0 11px; border-radius: 4px; border: 0; cursor: pointer;
       font: 700 11px 'Sora', sans-serif !important; letter-spacing: .3px;
       text-transform: uppercase; transition: opacity .12s; white-space: nowrap;
     }
-    .tlpt-mark-btn:hover { opacity: .8; }
-    .tlpt-mark-btn.mark-paid   { background: #1a3d28; color: #5ec47a; }
-    .tlpt-mark-btn.mark-unpaid { background: #2a1e04; color: #e8a020; }
-    .tlpt-mark-btn.mark-remove { background: #3a1616; color: #f0a0a0; }
-    .tlpt-mark-btn.mark-restore { background: #162535; color: #90c0f0; }
+    .tlet-mark-btn:hover { opacity: .8; }
+    .tlet-mark-btn.mark-paid   { background: #1a3d28; color: #5ec47a; }
+    .tlet-mark-btn.mark-unpaid { background: #2a1e04; color: #e8a020; }
+    .tlet-mark-btn.mark-remove { background: #3a1616; color: #f0a0a0; }
+    .tlet-mark-btn.mark-restore { background: #162535; color: #90c0f0; }
 
     /* ── Attack Log ── */
-    .tlpt-log { border-top: 1px solid #222220; padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
-    .tlpt-log-row {
+    .tlet-log { border-top: 1px solid #222220; padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+    .tlet-log-row {
       display: grid; grid-template-columns: 64px 1fr auto; gap: 6px;
       align-items: center; padding: 3px 0; font-size: 11px; color: #666460; font-weight: 600;
     }
-    .tlpt-log-time { font-family: 'JetBrains Mono', monospace !important; font-size: 11px; color: #555550; }
-    .tlpt-log-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tlpt-log-amt  { font-family: 'JetBrains Mono', monospace !important; color: #aaa8a0; font-weight: 700; white-space: nowrap; }
+    .tlet-log-time { font-family: 'JetBrains Mono', monospace !important; font-size: 11px; color: #555550; }
+    .tlet-log-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tlet-log-amt  { font-family: 'JetBrains Mono', monospace !important; color: #aaa8a0; font-weight: 700; white-space: nowrap; }
 
     /* Source tag */
-    .tlpt-source-tag {
+    .tlet-source-tag {
       display: inline-block; border-radius: 3px; padding: 1px 5px;
       background: #2a2010; color: #c8901a; font-size: 10px; font-weight: 700;
       margin-right: 5px; vertical-align: 1px;
     }
 
-    .tlpt-empty { padding: 32px 16px; text-align: center; color: #444440; font-size: 13px; font-weight: 600; }
+    .tlet-empty { padding: 32px 16px; text-align: center; color: #444440; font-size: 13px; font-weight: 600; }
 
     /* ── Settings divider ── */
-    .tlpt-settings-sep {
+    .tlet-settings-sep {
       height: 1px; background: #1e1e1c; margin: 0 12px;
     }
 
     @media (prefers-reduced-motion: reduce) {
-      #tlpt-panel, #tlpt-toggle { transition: none; }
+      #tlet-panel, #tlet-toggle { transition: none; }
     }
 
     @media (max-width: 600px) {
-      #tlpt-panel { width: calc(100vw - 28px); }
-      #tlpt-toggle.tlpt-attached { right: calc(100vw - 28px); }
-      .tlpt-config { grid-template-columns: 1fr 1fr; }
-      .tlpt-summary { grid-template-columns: 1fr 1fr; }
-      .tlpt-body-row { grid-template-columns: 1fr; }
+      #tlet-panel { width: calc(100vw - 28px); }
+      #tlet-toggle.tlet-attached { right: calc(100vw - 28px); }
+      .tlet-config { grid-template-columns: 1fr 1fr; }
+      .tlet-summary { grid-template-columns: 1fr 1fr; }
+      .tlet-body-row { grid-template-columns: 1fr; }
     }
   `);
 
@@ -340,186 +341,178 @@
 
   function buildShell() {
     const toggle = document.createElement("button");
-    toggle.id = "tlpt-toggle";
+    toggle.id = "tlet-toggle";
     toggle.type = "button";
     toggle.textContent = "PAY";
     toggle.title = "Open LE tracker";
     toggle.addEventListener("click", togglePanel);
 
     const panel = document.createElement("section");
-    panel.id = "tlpt-panel";
+    panel.id = "tlet-panel";
     panel.innerHTML = `
-      <div class="tlpt-head">
-        <div class="tlpt-title">LE Tracker</div>
-        <div class="tlpt-head-actions">
-          <button class="tlpt-btn" id="tlpt-refresh" type="button">↻ Refresh</button>
-          <button class="tlpt-icon-btn" id="tlpt-settings-btn" type="button" title="Settings">⚙</button>
-          <button class="tlpt-icon-btn" id="tlpt-close" type="button" title="Close">✕</button>
+      <div class="tlet-head">
+        <div class="tlet-title">LE Tracker</div>
+        <div class="tlet-head-actions">
+          <button class="tlet-btn" id="tlet-refresh" type="button">↻ Refresh</button>
+          <button class="tlet-icon-btn" id="tlet-settings-btn" type="button" title="Settings">⚙</button>
+          <button class="tlet-icon-btn" id="tlet-close" type="button" title="Close">✕</button>
         </div>
       </div>
 
       <!-- Settings drawer (hidden by default) -->
-      <div class="tlpt-settings" id="tlpt-settings-drawer">
-        <div class="tlpt-settings-inner">
-          <div class="tlpt-settings-title">Settings</div>
-          <div class="tlpt-key-row">
-            <div class="tlpt-field">
+      <div class="tlet-settings" id="tlet-settings-drawer">
+        <div class="tlet-settings-inner">
+          <div class="tlet-settings-title">Settings</div>
+          <div class="tlet-key-row">
+            <div class="tlet-field">
               <label>API Key</label>
-              <input id="tlpt-key" class="tlpt-input" type="password" autocomplete="off" placeholder="Paste Limited Access key" />
+              <input id="tlet-key" class="tlet-input" type="password" autocomplete="off" placeholder="Paste Limited Access key" />
             </div>
-            <button class="tlpt-btn" id="tlpt-save-key" type="button" style="align-self:end">Save</button>
+            <button class="tlet-btn" id="tlet-save-key" type="button" style="align-self:end">Save</button>
           </div>
-          <div id="tlpt-key-status" class="tlpt-key-status">
-            <span class="tlpt-key-dot" id="tlpt-key-dot"></span>
-            <span class="tlpt-key-text" id="tlpt-key-text">No key saved</span>
+          <div id="tlet-key-status" class="tlet-key-status">
+            <span class="tlet-key-dot" id="tlet-key-dot"></span>
+            <span class="tlet-key-text" id="tlet-key-text">No key saved</span>
           </div>
-          <div class="tlpt-settings-sep"></div>
-          <div class="tlpt-settings-title">Tracking</div>
-          <div class="tlpt-field">
-            <label>Lookback Days</label>
-            <input id="tlpt-lookback" class="tlpt-input" type="number" min="0" max="365" step="1" />
-          </div>
-          <div class="tlpt-settings-sep"></div>
-          <div class="tlpt-settings-title">Sources</div>
-          <div class="tlpt-source-manage-row">
-            <select id="tlpt-source-manage" class="tlpt-input tlpt-source-select"></select>
-            <div class="tlpt-source-manage-actions">
-              <button class="tlpt-btn" id="tlpt-rename-source" type="button">Rename</button>
-              <button class="tlpt-btn danger" id="tlpt-delete-source" type="button">Delete</button>
+          <div class="tlet-settings-sep"></div>
+          <div class="tlet-settings-title">Sources</div>
+          <div class="tlet-source-manage-row">
+            <select id="tlet-source-manage" class="tlet-input tlet-source-select"></select>
+            <div class="tlet-source-manage-actions">
+              <button class="tlet-btn" id="tlet-rename-source" type="button">Rename</button>
+              <button class="tlet-btn danger" id="tlet-delete-source" type="button">Delete</button>
             </div>
           </div>
-          <div class="tlpt-settings-sep"></div>
-          <div class="tlpt-settings-title">Backup</div>
-          <div class="tlpt-backup-row">
-            <button class="tlpt-btn" id="tlpt-export-backup" type="button">Export JSON</button>
-            <button class="tlpt-btn" id="tlpt-import-backup" type="button">Import JSON</button>
+          <div class="tlet-settings-sep"></div>
+          <div class="tlet-settings-title">Backup</div>
+          <div class="tlet-backup-row">
+            <button class="tlet-btn" id="tlet-export-backup" type="button">Export JSON</button>
+            <button class="tlet-btn" id="tlet-import-backup" type="button">Import JSON</button>
           </div>
-          <input id="tlpt-import-file" type="file" accept="application/json,.json" style="display:none" />
+          <input id="tlet-import-file" type="file" accept="application/json,.json" style="display:none" />
         </div>
       </div>
 
-      <!-- Config: rates + date + load -->
-      <div class="tlpt-config">
-        <div class="tlpt-field">
-          <label>Date</label>
-          <input id="tlpt-date" class="tlpt-input" type="date" />
+      <!-- Config: rows + rates + refresh -->
+      <div class="tlet-config">
+        <div class="tlet-field">
+          <label>Rows</label>
+          <input id="tlet-row-limit" class="tlet-input" type="number" min="1" max="1000" step="25" />
         </div>
-        <div class="tlpt-field">
+        <div class="tlet-field">
           <label>Loss $</label>
-          <input id="tlpt-rate" class="tlpt-input" type="number" min="0" step="50000" />
+          <input id="tlet-rate" class="tlet-input" type="number" min="0" step="50000" />
         </div>
-        <div class="tlpt-field">
+        <div class="tlet-field">
           <label>Escape $</label>
-          <input id="tlpt-escape-rate" class="tlpt-input" type="number" min="0" step="50000" />
+          <input id="tlet-escape-rate" class="tlet-input" type="number" min="0" step="50000" />
         </div>
-        <button class="tlpt-btn" id="tlpt-load" type="button" style="align-self:end">Load</button>
+        <button class="tlet-icon-btn" id="tlet-load" type="button" title="Refresh latest rows" style="align-self:end">?</button>
       </div>
 
       <!-- Summary -->
-      <div class="tlpt-summary">
-        <div class="tlpt-stat">
-          <div class="tlpt-stat-label">Billable</div>
-          <div class="tlpt-stat-value" id="tlpt-loss-count">0</div>
+      <div class="tlet-summary">
+        <div class="tlet-stat">
+          <div class="tlet-stat-label">Billable</div>
+          <div class="tlet-stat-value" id="tlet-loss-count">0</div>
         </div>
-        <div class="tlpt-stat">
-          <div class="tlpt-stat-label">Expected</div>
-          <div class="tlpt-stat-value" id="tlpt-expected">$0</div>
+        <div class="tlet-stat">
+          <div class="tlet-stat-label">Expected</div>
+          <div class="tlet-stat-value" id="tlet-expected">$0</div>
         </div>
-        <div class="tlpt-stat">
-          <div class="tlpt-stat-label">Paid</div>
-          <div class="tlpt-stat-value" id="tlpt-paid-stat">$0</div>
+        <div class="tlet-stat">
+          <div class="tlet-stat-label">Paid</div>
+          <div class="tlet-stat-value" id="tlet-paid-stat">$0</div>
         </div>
-        <div class="tlpt-stat">
-          <div class="tlpt-stat-label">Outstanding</div>
-          <div class="tlpt-stat-value" id="tlpt-outstanding">$0</div>
+        <div class="tlet-stat">
+          <div class="tlet-stat-label">Outstanding</div>
+          <div class="tlet-stat-value" id="tlet-outstanding">$0</div>
         </div>
       </div>
 
-      <div class="tlpt-view-tabs">
-        <button class="tlpt-view-tab active" data-view="unpaid" type="button">Unpaid</button>
-        <button class="tlpt-view-tab" data-view="paid" type="button">Paid</button>
-        <button class="tlpt-view-tab" data-view="removed" type="button">Removed</button>
+      <div class="tlet-view-tabs">
+        <button class="tlet-view-tab active" data-view="unpaid" type="button">Unpaid</button>
+        <button class="tlet-view-tab" data-view="paid" type="button">Paid</button>
+        <button class="tlet-view-tab" data-view="removed" type="button">Removed</button>
       </div>
 
-      <div class="tlpt-filter-bar">
-        <input id="tlpt-search" class="tlpt-input" type="search" placeholder="Search name or ID" />
-        <select id="tlpt-source-filter" class="tlpt-input tlpt-source-select"></select>
+      <div class="tlet-filter-bar">
+        <input id="tlet-search" class="tlet-input" type="search" placeholder="Search name or ID" />
+        <select id="tlet-source-filter" class="tlet-input tlet-source-select"></select>
       </div>
-      <div class="tlpt-bulk-bar">
-        <button class="tlpt-btn success" id="tlpt-bulk-paid" type="button">Mark Paid</button>
-        <button class="tlpt-btn danger" id="tlpt-bulk-remove" type="button">Remove</button>
-        <button class="tlpt-btn blue" id="tlpt-bulk-restore" type="button">Restore</button>
+      <div class="tlet-bulk-bar">
+        <button class="tlet-btn success" id="tlet-bulk-paid" type="button">Mark Paid</button>
+        <button class="tlet-btn danger" id="tlet-bulk-remove" type="button">Remove</button>
+        <button class="tlet-btn blue" id="tlet-bulk-restore" type="button">Restore</button>
       </div>
 
-      <div class="tlpt-due" id="tlpt-due" style="display:none"></div>
-      <div class="tlpt-status" id="tlpt-status"></div>
-      <div class="tlpt-body" id="tlpt-table-wrap"></div>
+      <div class="tlet-due" id="tlet-due" style="display:none"></div>
+      <div class="tlet-status" id="tlet-status"></div>
+      <div class="tlet-body" id="tlet-table-wrap"></div>
     `;
 
     document.body.append(toggle, panel);
 
     // Wire inputs
-    const keyInput = document.getElementById("tlpt-key");
-    const rateInput = document.getElementById("tlpt-rate");
-    const escRateInput = document.getElementById("tlpt-escape-rate");
-    const dateInput = document.getElementById("tlpt-date");
-    const lookbackInput = document.getElementById("tlpt-lookback");
+    const keyInput = document.getElementById("tlet-key");
+    const rateInput = document.getElementById("tlet-rate");
+    const escRateInput = document.getElementById("tlet-escape-rate");
+    const rowLimitInput = document.getElementById("tlet-row-limit");
 
     keyInput.value = state.apiKey || "";
     rateInput.value = String(state.defaultRate || DEFAULT_RATE);
     escRateInput.value = String(state.defaultEscapeRate || DEFAULT_ESCAPE_RATE);
-    dateInput.value = state.selectedDate || todayInputValue();
-    lookbackInput.value = String(lookbackDays());
+    rowLimitInput.value = String(rowLimit());
 
     updateKeyStatus();
 
-    document.getElementById("tlpt-save-key").addEventListener("click", () => {
+    document.getElementById("tlet-save-key").addEventListener("click", () => {
       state.apiKey = keyInput.value.trim();
       saveState();
       updateKeyStatus();
       setStatus(state.apiKey ? "API key saved." : "Key cleared.");
     });
     document
-      .getElementById("tlpt-export-backup")
+      .getElementById("tlet-export-backup")
       .addEventListener("click", exportBackup);
-    document.getElementById("tlpt-import-backup").addEventListener("click", () => {
-      document.getElementById("tlpt-import-file").click();
+    document.getElementById("tlet-import-backup").addEventListener("click", () => {
+      document.getElementById("tlet-import-file").click();
     });
     document
-      .getElementById("tlpt-import-file")
+      .getElementById("tlet-import-file")
       .addEventListener("change", importBackup);
     document
-      .getElementById("tlpt-rename-source")
+      .getElementById("tlet-rename-source")
       .addEventListener("click", renameSelectedSource);
     document
-      .getElementById("tlpt-delete-source")
+      .getElementById("tlet-delete-source")
       .addEventListener("click", deleteSelectedSource);
-    document.getElementById("tlpt-search").addEventListener("input", (e) => {
+    document.getElementById("tlet-search").addEventListener("input", (e) => {
       searchTerm = String(e.target.value || "").trim().toLowerCase();
       expandedGroups.clear();
       queueSearchRender();
     });
     document
-      .getElementById("tlpt-source-filter")
+      .getElementById("tlet-source-filter")
       .addEventListener("change", (e) => {
         sourceFilter = String(e.target.value || "");
         expandedGroups.clear();
         render();
       });
     document
-      .getElementById("tlpt-bulk-paid")
+      .getElementById("tlet-bulk-paid")
       .addEventListener("click", markVisiblePaid);
     document
-      .getElementById("tlpt-bulk-remove")
+      .getElementById("tlet-bulk-remove")
       .addEventListener("click", removeVisibleGroups);
     document
-      .getElementById("tlpt-bulk-restore")
+      .getElementById("tlet-bulk-restore")
       .addEventListener("click", restoreVisibleGroups);
     document
-      .getElementById("tlpt-table-wrap")
+      .getElementById("tlet-table-wrap")
       .addEventListener("click", handleTableClick);
     document
-      .getElementById("tlpt-table-wrap")
+      .getElementById("tlet-table-wrap")
       .addEventListener("change", handleTableChange);
 
     rateInput.addEventListener("change", () => {
@@ -535,28 +528,23 @@
       saveState();
       render();
     });
-    dateInput.addEventListener("change", () => {
-      state.selectedDate = dateInput.value || todayInputValue();
+    rowLimitInput.addEventListener("change", () => {
+      state.rowLimit = clampRowLimit(rowLimitInput.value);
+      rowLimitInput.value = String(state.rowLimit);
       saveState();
+      setStatus("Row limit set to " + state.rowLimit + ".");
     });
-    lookbackInput.addEventListener("change", () => {
-      state.lookbackDays = clampLookbackDays(lookbackInput.value);
-      lookbackInput.value = String(state.lookbackDays);
-      saveState();
-      setStatus(`Lookback set to ${state.lookbackDays} days.`);
-    });
-
     document
-      .getElementById("tlpt-refresh")
+      .getElementById("tlet-refresh")
       .addEventListener("click", refreshLosses);
     document
-      .getElementById("tlpt-load")
+      .getElementById("tlet-load")
       .addEventListener("click", refreshLosses);
     document
-      .getElementById("tlpt-close")
+      .getElementById("tlet-close")
       .addEventListener("click", togglePanel);
     document
-      .getElementById("tlpt-settings-btn")
+      .getElementById("tlet-settings-btn")
       .addEventListener("click", toggleSettings);
     panel.querySelectorAll("[data-view]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -571,8 +559,8 @@
   }
 
   function updateKeyStatus() {
-    const dot = document.getElementById("tlpt-key-dot");
-    const text = document.getElementById("tlpt-key-text");
+    const dot = document.getElementById("tlet-key-dot");
+    const text = document.getElementById("tlet-key-text");
     if (!dot || !text) return;
     if (state.apiKey) {
       dot.classList.add("set");
@@ -591,20 +579,20 @@
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     document
-      .getElementById("tlpt-settings-drawer")
+      .getElementById("tlet-settings-drawer")
       .classList.toggle("open", settingsOpen);
     document
-      .getElementById("tlpt-settings-btn")
+      .getElementById("tlet-settings-btn")
       .classList.toggle("active", settingsOpen);
-    if (settingsOpen) document.getElementById("tlpt-key").focus();
+    if (settingsOpen) document.getElementById("tlet-key").focus();
   }
 
   function togglePanel() {
     isOpen = !isOpen;
-    document.getElementById("tlpt-panel").classList.toggle("tlpt-open", isOpen);
+    document.getElementById("tlet-panel").classList.toggle("tlet-open", isOpen);
     document
-      .getElementById("tlpt-toggle")
-      .classList.toggle("tlpt-attached", isOpen);
+      .getElementById("tlet-toggle")
+      .classList.toggle("tlet-attached", isOpen);
     if (isOpen && state.apiKey && lossRows.length === 0) refreshLosses();
   }
 
@@ -660,7 +648,7 @@
         syncInputsFromState();
         updateKeyStatus();
         render();
-        setStatus("Backup imported. Press Load to refresh the visible rows.");
+        setStatus("Backup imported. Press refresh to load the latest rows.");
       } catch (err) {
         setStatus(`Import failed: ${err.message}`);
       } finally {
@@ -675,21 +663,19 @@
   }
 
   function syncInputsFromState() {
-    const keyInput = document.getElementById("tlpt-key");
-    const rateInput = document.getElementById("tlpt-rate");
-    const escRateInput = document.getElementById("tlpt-escape-rate");
-    const dateInput = document.getElementById("tlpt-date");
-    const lookbackInput = document.getElementById("tlpt-lookback");
-    const searchInput = document.getElementById("tlpt-search");
-    const sourceFilterInput = document.getElementById("tlpt-source-filter");
+    const keyInput = document.getElementById("tlet-key");
+    const rateInput = document.getElementById("tlet-rate");
+    const escRateInput = document.getElementById("tlet-escape-rate");
+    const rowLimitInput = document.getElementById("tlet-row-limit");
+    const searchInput = document.getElementById("tlet-search");
+    const sourceFilterInput = document.getElementById("tlet-source-filter");
     if (keyInput) keyInput.value = state.apiKey || "";
     if (rateInput) rateInput.value = String(state.defaultRate || DEFAULT_RATE);
     if (escRateInput)
       escRateInput.value = String(
         state.defaultEscapeRate || DEFAULT_ESCAPE_RATE,
       );
-    if (dateInput) dateInput.value = state.selectedDate || todayInputValue();
-    if (lookbackInput) lookbackInput.value = String(lookbackDays());
+    if (rowLimitInput) rowLimitInput.value = String(rowLimit());
     if (searchInput) searchInput.value = searchTerm;
     if (sourceFilterInput) sourceFilterInput.value = sourceFilter;
   }
@@ -698,67 +684,80 @@
 
   async function refreshLosses() {
     const key =
-      state.apiKey || document.getElementById("tlpt-key").value.trim();
+      state.apiKey || document.getElementById("tlet-key").value.trim();
     if (!key) {
-      setStatus("No API key — open ⚙ Settings to add one.");
+      setStatus("No API key ? open ? Settings to add one.");
       if (!settingsOpen) toggleSettings();
       return;
     }
 
-    setStatus("Loading…");
+    setStatus("Refreshing latest rows?");
     try {
-      state.selectedDate =
-        document.getElementById("tlpt-date").value || todayInputValue();
+      state.rowLimit = rowLimit();
       saveState();
 
-      const range = selectedDateRange(state.selectedDate);
-      const fetchRange = earlierRange(range, lookbackDays());
-      const [outgoingData, incomingData] = await Promise.all([
-        fetchAttacksForDirection(key, fetchRange, "outgoing"),
-        fetchAttacksForDirection(key, fetchRange, "incoming"),
+      const limit = rowLimit();
+      const [outgoingData, legacyData] = await Promise.all([
+        fetchLatestOutgoingAttacks(key, limit),
+        fetchLegacyAttacks(key),
       ]);
 
-      const attacks = [
-        ...tagDirection(outgoingData.attacks, "outgoing"),
-        ...tagDirection(incomingData.attacks, "incoming"),
-      ];
+      const attacks = mergeAttackDetails(
+        tagDirection(outgoingData.attacks, "outgoing"),
+        tagDirection(legacyData.attacks, "outgoing"),
+      )
+        .sort((a, b) => attackTimestamp(b) - attackTimestamp(a))
+        .slice(0, limit);
 
       const fetchedRows = dedupeAttacks(attacks)
-        .map((attack) => normalizeAttack(attack, attack.__tlptDirection))
-        .filter((r) => r.timestamp >= fetchRange.from && r.timestamp < range.to)
-        .filter(isBillableAction);
-      cacheBillableRows(fetchedRows, false);
+        .map((attack) => normalizeAttack(attack, attack.__tletDirection))
+        .filter(isBillableAction)
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, limit);
 
-      lossRows = dedupeRows([
-        ...fetchedRows,
-        ...cachedBillableRows(fetchRange.from, range.to),
-      ]).filter((row) => row.timestamp >= fetchRange.from && row.timestamp < range.to);
-
+      lossRows = dedupeRows(fetchedRows);
       await hydrateMissingNames(key, lossRows, false);
       cacheBillableRows(lossRows, false);
       saveState();
-      includesEarlierUnpaid = lossRows.some(
-        (row) => row.timestamp < range.from && rowOutstanding(row) > 0,
-      );
-      const earlierText = includesEarlierUnpaid
-        ? `, including unpaid from up to ${lookbackDays()} earlier days`
-        : "";
+      includesEarlierUnpaid = false;
       setStatus(
-        `${lossRows.length} billable attacks${earlierText} from ${attacks.length} total.`,
+        lossRows.length +
+          " billable attacks loaded from " +
+          attacks.length +
+          " latest API rows.",
       );
       render();
     } catch (err) {
-      setStatus(`Error: ${err.message}`);
+      setStatus("Error: " + err.message);
     }
   }
 
-  /* ─── NORMALIZE ─── */
-
-  async function fetchAttacksForDirection(apiKey, range, direction) {
-    const url = `${API_BASE}/user/attacksfull?filters=${direction}&sort=DESC&limit=1000&from=${range.from}&to=${range.to}&key=${encodeURIComponent(apiKey)}&comment=le-tracker`;
+  async function fetchLatestOutgoingAttacks(apiKey, limit) {
+    const url =
+      API_BASE +
+      "/user/attacksfull?filters=outgoing&sort=DESC&limit=" +
+      encodeURIComponent(limit) +
+      "&key=" +
+      encodeURIComponent(apiKey) +
+      "&comment=le-tracker";
     const data = await requestJson(url);
     if (data.error) {
-      throw new Error(`${data.error.code}: ${data.error.error || "Torn API error"}`);
+      throw new Error(data.error.code + ": " + (data.error.error || "Torn API error"));
+    }
+    return {
+      attacks: extractAttacks(data),
+    };
+  }
+
+  async function fetchLegacyAttacks(apiKey) {
+    const url =
+      API_V1_BASE +
+      "/user/?selections=attacks&key=" +
+      encodeURIComponent(apiKey) +
+      "&comment=LETracker";
+    const data = await requestJson(url);
+    if (data.error) {
+      throw new Error(data.error.code + ": " + (data.error.error || "Torn API error"));
     }
     return {
       attacks: extractAttacks(data),
@@ -768,14 +767,58 @@
   function extractAttacks(data) {
     const attacks = data && (data.attacks || (data.data && data.data.attacks));
     if (Array.isArray(attacks)) return attacks;
-    if (attacks && typeof attacks === "object") return Object.values(attacks);
+    if (attacks && typeof attacks === "object") {
+      return Object.entries(attacks).map(([id, attack]) => ({
+        id,
+        ...(attack && typeof attack === "object" ? attack : {}),
+      }));
+    }
     return [];
+  }
+
+  function mergeAttackDetails(primaryAttacks, secondaryAttacks) {
+    const map = new Map();
+    primaryAttacks.forEach((attack) => {
+      const key = attackKey(attack);
+      if (key) map.set(key, attack);
+    });
+    secondaryAttacks.forEach((attack) => {
+      const key = attackKey(attack);
+      if (!key || !map.has(key)) return;
+      map.set(key, { ...map.get(key), ...attack });
+    });
+    return Array.from(map.values());
+  }
+
+  function attackKey(attack) {
+    return String(
+      firstValue(
+        attack && attack.id,
+        attack && attack.attack_id,
+        attack && attack.code,
+        attack && attack.timestamp_started,
+        attack && attack.started,
+      ) || "",
+    );
+  }
+
+  function attackTimestamp(attack) {
+    return Number(
+      firstValue(
+        attack && attack.started,
+        attack && attack.start,
+        attack && attack.timestamp_started,
+        attack && attack.timestamp,
+        attack && attack.ended,
+        attack && attack.timestamp_ended,
+      ) || 0,
+    );
   }
 
   function tagDirection(attacks, direction) {
     return attacks.map((attack) => ({
       ...attack,
-      __tlptDirection: direction,
+      __tletDirection: direction,
     }));
   }
 
@@ -786,7 +829,7 @@
         attack.id ||
           attack.attack_id ||
           attack.code ||
-          `${attack.started || attack.timestamp}:${attack.result}:${attack.__tlptDirection}`,
+          `${attack.started || attack.timestamp}:${attack.result}:${attack.__tletDirection}`,
       );
       if (seen.has(key)) return false;
       seen.add(key);
@@ -1006,7 +1049,7 @@
   }
 
   function render() {
-    const tableWrap = document.getElementById("tlpt-table-wrap");
+    const tableWrap = document.getElementById("tlet-table-wrap");
     if (!tableWrap) return;
 
     updateViewTabs();
@@ -1018,15 +1061,15 @@
     const paidTotal = groups.reduce((s, g) => s + g.paid, 0);
     const outstandingTotal = groups.reduce((s, g) => s + g.outstanding, 0);
 
-    document.getElementById("tlpt-loss-count").textContent = String(
+    document.getElementById("tlet-loss-count").textContent = String(
       visibleRows.length,
     );
-    document.getElementById("tlpt-expected").textContent = money(expectedTotal);
-    document.getElementById("tlpt-paid-stat").textContent = money(paidTotal);
-    document.getElementById("tlpt-outstanding").textContent =
+    document.getElementById("tlet-expected").textContent = money(expectedTotal);
+    document.getElementById("tlet-paid-stat").textContent = money(paidTotal);
+    document.getElementById("tlet-outstanding").textContent =
       money(outstandingTotal);
 
-    const dueEl = document.getElementById("tlpt-due");
+    const dueEl = document.getElementById("tlet-due");
     if (visibleRows.length > 0) {
       dueEl.style.display = "";
       dueEl.innerHTML = viewSummaryHtml(expectedTotal, paidTotal, outstandingTotal);
@@ -1043,7 +1086,7 @@
   }
 
   function updateViewTabs() {
-    const panel = document.getElementById("tlpt-panel");
+    const panel = document.getElementById("tlet-panel");
     if (!panel) return;
     panel.querySelectorAll("[data-view]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.view === activeView);
@@ -1051,14 +1094,14 @@
   }
 
   function updateSourceControls() {
-    const filter = document.getElementById("tlpt-source-filter");
+    const filter = document.getElementById("tlet-source-filter");
     if (filter) {
       const current = sourceFilter;
       filter.innerHTML = sourceFilterOptionsHtml(current);
       filter.value = current;
     }
 
-    const manager = document.getElementById("tlpt-source-manage");
+    const manager = document.getElementById("tlet-source-manage");
     if (manager) {
       const current = manager.value;
       manager.innerHTML = sourceManageOptionsHtml(current);
@@ -1150,23 +1193,28 @@
 
   function viewSummaryHtml(expectedTotal, paidTotal, outstandingTotal) {
     if (activeView === "paid") {
-      return `Paid contracts through ${escapeHtml(state.selectedDate || todayInputValue())}: <span class="tlpt-due-amount">${escapeHtml(money(paidTotal))}</span>`;
+      return 'Paid loaded contracts: <span class="tlet-due-amount">' +
+        escapeHtml(money(paidTotal)) +
+        "</span>";
     }
     if (activeView === "removed") {
-      return `Removed contracts through ${escapeHtml(state.selectedDate || todayInputValue())}: <span class="tlpt-due-amount">${escapeHtml(money(expectedTotal))}</span>`;
+      return 'Removed loaded contracts: <span class="tlet-due-amount">' +
+        escapeHtml(money(expectedTotal)) +
+        "</span>";
     }
-    const dueLabel = includesEarlierUnpaid ? "Due through" : "Due";
-    return `${dueLabel} ${escapeHtml(state.selectedDate || todayInputValue())}: <span class="tlpt-due-amount">${escapeHtml(money(outstandingTotal))}</span>`;
+    return 'Due in latest loaded rows: <span class="tlet-due-amount">' +
+      escapeHtml(money(outstandingTotal)) +
+      "</span>";
   }
 
   function emptyViewHtml() {
     if (activeView === "paid") {
-      return '<div class="tlpt-empty">No paid contracts for this view.</div>';
+      return '<div class="tlet-empty">No paid contracts for this view.</div>';
     }
     if (activeView === "removed") {
-      return '<div class="tlpt-empty">No removed contracts for this view.</div>';
+      return '<div class="tlet-empty">No removed contracts for this view.</div>';
     }
-    return '<div class="tlpt-empty">No unpaid losses loaded.<br>Set your API key (⚙) and press Load.</div>';
+    return '<div class="tlet-empty">No unpaid losses loaded.<br>Set your API key (⚙) and press refresh.</div>';
   }
 
   /* ─── GROUP BUILD ─── */
@@ -1260,9 +1308,9 @@
     const count = groups.reduce((sum, group) => sum + group.rows.length, 0);
 
     return `
-      <div class="tlpt-date-section">
+      <div class="tlet-date-section">
         <span>${escapeHtml(day)} · ${count} ${count === 1 ? "record" : "records"}</span>
-        <span class="tlpt-date-total">${escapeHtml(money(total))}</span>
+        <span class="tlet-date-total">${escapeHtml(money(total))}</span>
       </div>
       ${groups.map(groupHtml).join("")}
     `;
@@ -1290,10 +1338,10 @@
 
     const pillsHtml = [
       group.lossCount > 0
-        ? `<span class="tlpt-pill tlpt-pill-loss">${group.lossCount}L</span>`
+        ? `<span class="tlet-pill tlet-pill-loss">${group.lossCount}L</span>`
         : "",
       group.escapeCount > 0
-        ? `<span class="tlpt-pill tlpt-pill-esc">${group.escapeCount}E</span>`
+        ? `<span class="tlet-pill tlet-pill-esc">${group.escapeCount}E</span>`
         : "",
     ].join("");
 
@@ -1308,34 +1356,34 @@
       : "";
 
     return `
-      <div class="tlpt-contract">
-        <div class="tlpt-contract-head" data-expand="${gId}">
+      <div class="tlet-contract">
+        <div class="tlet-contract-head" data-expand="${gId}">
           <div style="min-width:0">
-            <div class="tlpt-target-name">${note ? `<span class="tlpt-source-tag">${escapeHtml(note)}</span>` : ""}${targetHtml}${idBit}</div>
-            <div class="tlpt-target-meta">${escapeHtml(group.day)} · ${escapeHtml(compactTimeRange(group.lastTimestamp, group.firstTimestamp))}</div>
+            <div class="tlet-target-name">${note ? `<span class="tlet-source-tag">${escapeHtml(note)}</span>` : ""}${targetHtml}${idBit}</div>
+            <div class="tlet-target-meta">${escapeHtml(group.day)} · ${escapeHtml(compactTimeRange(group.lastTimestamp, group.firstTimestamp))}</div>
           </div>
-          <div class="tlpt-pills">${pillsHtml}</div>
-          <div class="tlpt-badge ${isRemoved ? "tlpt-badge-unpaid" : isPaid ? "tlpt-badge-paid" : "tlpt-badge-unpaid"}">${isRemoved ? "Removed" : isPaid ? "Paid" : "Unpaid"}</div>
-          <div class="tlpt-row-amount">${escapeHtml(money(group.expected))}</div>
-          <div class="tlpt-chevron${isExpanded ? " open" : ""}">▼</div>
+          <div class="tlet-pills">${pillsHtml}</div>
+          <div class="tlet-badge ${isRemoved ? "tlet-badge-unpaid" : isPaid ? "tlet-badge-paid" : "tlet-badge-unpaid"}">${isRemoved ? "Removed" : isPaid ? "Paid" : "Unpaid"}</div>
+          <div class="tlet-row-amount">${escapeHtml(money(group.expected))}</div>
+          <div class="tlet-chevron${isExpanded ? " open" : ""}">▼</div>
         </div>
 
-        <div class="tlpt-contract-body${isExpanded ? " open" : ""}">
-          <div class="tlpt-body-row">
-            <div class="tlpt-rate-pair">
-              ${group.lossCount > 0 ? `<div class="tlpt-field"><label>Loss $</label><input class="tlpt-mini-input" data-rate="${gId}" data-kind="loss" type="number" min="0" step="50000" value="${lossRate}"></div>` : ""}
-              ${group.escapeCount > 0 ? `<div class="tlpt-field"><label>Escape $</label><input class="tlpt-mini-input" data-rate="${gId}" data-kind="escape" type="number" min="0" step="50000" value="${escapeRate}"></div>` : ""}
+        <div class="tlet-contract-body${isExpanded ? " open" : ""}">
+          <div class="tlet-body-row">
+            <div class="tlet-rate-pair">
+              ${group.lossCount > 0 ? `<div class="tlet-field"><label>Loss $</label><input class="tlet-mini-input" data-rate="${gId}" data-kind="loss" type="number" min="0" step="50000" value="${lossRate}"></div>` : ""}
+              ${group.escapeCount > 0 ? `<div class="tlet-field"><label>Escape $</label><input class="tlet-mini-input" data-rate="${gId}" data-kind="escape" type="number" min="0" step="50000" value="${escapeRate}"></div>` : ""}
             </div>
-            <div class="tlpt-field">
+            <div class="tlet-field">
               <label>Source</label>
               ${sourceSelectHtml(gId, note)}
             </div>
             <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
-              <div class="tlpt-formula">${escapeHtml(formulaParts.join(" + "))} = <span class="tlpt-formula-total">${escapeHtml(money(group.expected))}</span></div>
+              <div class="tlet-formula">${escapeHtml(formulaParts.join(" + "))} = <span class="tlet-formula-total">${escapeHtml(money(group.expected))}</span></div>
               ${groupActionsHtml(group, isPaid, isRemoved)}
             </div>
           </div>
-          <div class="tlpt-log">
+          <div class="tlet-log">
             ${group.rows.map(attackLogHtml).join("")}
           </div>
         </div>
@@ -1350,10 +1398,10 @@
       25,
     );
     return `
-      <div class="tlpt-log-row">
-        <span class="tlpt-log-time">${escapeHtml(formatTime(row.timestamp))}</span>
-        <span class="tlpt-log-desc">${escapeHtml(energy)}e → ${escapeHtml(row.defenderName)}</span>
-        <span class="tlpt-log-amt">${escapeHtml(money(row.expected))}</span>
+      <div class="tlet-log-row">
+        <span class="tlet-log-time">${escapeHtml(formatTime(row.timestamp))}</span>
+        <span class="tlet-log-desc">${escapeHtml(energy)}e → ${escapeHtml(row.defenderName)}</span>
+        <span class="tlet-log-amt">${escapeHtml(money(row.expected))}</span>
       </div>
     `;
   }
@@ -1389,20 +1437,20 @@
       }),
       '<option value="__add__">+ Add</option>',
     ];
-    return `<select class="tlpt-mini-input tlpt-source-select" data-note="${groupId}">${options.join("")}</select>`;
+    return `<select class="tlet-mini-input tlet-source-select" data-note="${groupId}">${options.join("")}</select>`;
   }
 
   function groupActionsHtml(group, isPaid, isRemoved) {
     const gId = escapeAttr(group.id);
     if (isRemoved) {
-      return `<button class="tlpt-mark-btn mark-restore" data-restore-group="${gId}" type="button">Restore</button>`;
+      return `<button class="tlet-mark-btn mark-restore" data-restore-group="${gId}" type="button">Restore</button>`;
     }
     return `
       <div style="display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap">
-        <button class="tlpt-mark-btn ${isPaid ? "mark-unpaid" : "mark-paid"}" data-paid-toggle="${gId}" data-is-paid="${isPaid}" type="button">
+        <button class="tlet-mark-btn ${isPaid ? "mark-unpaid" : "mark-paid"}" data-paid-toggle="${gId}" data-is-paid="${isPaid}" type="button">
           ${isPaid ? "Mark Unpaid" : "Mark Paid"}
         </button>
-        <button class="tlpt-mark-btn mark-remove" data-remove-group="${gId}" type="button">Remove</button>
+        <button class="tlet-mark-btn mark-remove" data-remove-group="${gId}" type="button">Remove</button>
       </div>
     `;
   }
@@ -1476,7 +1524,7 @@
   }
 
   function renameSelectedSource() {
-    const select = document.getElementById("tlpt-source-manage");
+    const select = document.getElementById("tlet-source-manage");
     const oldCode = normalizeSourceCode(select && select.value);
     if (!oldCode) return;
     if (DEFAULT_SOURCE_CODES.includes(oldCode)) {
@@ -1510,7 +1558,7 @@
   }
 
   function deleteSelectedSource() {
-    const select = document.getElementById("tlpt-source-manage");
+    const select = document.getElementById("tlet-source-manage");
     const code = normalizeSourceCode(select && select.value);
     if (!code) return;
     if (DEFAULT_SOURCE_CODES.includes(code)) {
@@ -1789,6 +1837,7 @@
         sourceCodes: [],
         removedRows: {},
         lookbackDays: DEFAULT_LOOKBACK_DAYS,
+        rowLimit: DEFAULT_ROW_LIMIT,
         ...JSON.parse(localStorage.getItem(STORE_KEY) || localStorage.getItem(LEGACY_STORE_KEY) || "{}"),
       });
     } catch (_) {
@@ -1804,6 +1853,7 @@
         sourceCodes: [],
         removedRows: {},
         lookbackDays: DEFAULT_LOOKBACK_DAYS,
+        rowLimit: DEFAULT_ROW_LIMIT,
       });
     }
   }
@@ -1827,6 +1877,7 @@
       billableRows: plainObject(saved.billableRows) ? saved.billableRows : {},
       removedRows: plainObject(saved.removedRows) ? saved.removedRows : {},
       lookbackDays: clampLookbackDays(saved.lookbackDays),
+      rowLimit: clampRowLimit(saved.rowLimit),
       sourceCodes: Array.isArray(saved.sourceCodes)
         ? saved.sourceCodes.map(normalizeSourceCode).filter(Boolean)
         : [],
@@ -1837,7 +1888,7 @@
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
   }
   function setStatus(text) {
-    const el = document.getElementById("tlpt-status");
+    const el = document.getElementById("tlet-status");
     if (el) el.textContent = text;
   }
   function money(value) {
@@ -1868,30 +1919,22 @@
     return clampLookbackDays(state.lookbackDays);
   }
 
+  function rowLimit() {
+    return clampRowLimit(state.rowLimit);
+  }
+
+  function clampRowLimit(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return DEFAULT_ROW_LIMIT;
+    return Math.min(1000, Math.max(1, Math.floor(n)));
+  }
+
   function clampLookbackDays(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return DEFAULT_LOOKBACK_DAYS;
     return Math.min(365, Math.max(0, Math.floor(n)));
   }
 
-  function selectedDateRange(dateValue) {
-    const safe = /^\d{4}-\d{2}-\d{2}$/.test(dateValue)
-      ? dateValue
-      : todayInputValue();
-    const [year, month, day] = safe.split("-").map(Number);
-    const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-    const end = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0));
-    return {
-      from: Math.floor(start.getTime() / 1000),
-      to: Math.floor(end.getTime() / 1000),
-    };
-  }
-  function earlierRange(range, days) {
-    return {
-      from: range.from - Math.max(0, Number(days) || 0) * 86400,
-      to: range.to,
-    };
-  }
   function escapeHtml(v) {
     return String(v)
       .replace(/&/g, "&amp;")
