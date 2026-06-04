@@ -15,7 +15,7 @@
   "use strict";
 
   const STORE_KEY = "tlet:v1";
-  const LEGACY_STORE_KEY = "tlet:v1";
+  const LEGACY_STORE_KEY = "tlpt:v1";
   const API_BASE = "https://api.torn.com/v2";
   const API_V1_BASE = "https://api.torn.com";
   const DEFAULT_RATE = 350000;
@@ -23,6 +23,11 @@
   const DEFAULT_LOOKBACK_DAYS = 30;
   const DEFAULT_ROW_LIMIT = 1000;
   const DEFAULT_SOURCE_CODES = ["BHG", "NST"];
+  const DEFAULT_SOURCE_COLORS = {
+    BHG: "#c8901a",
+    NST: "#5d8cff",
+  };
+  const NPC_IDS = new Set([4, 7, 10, 15, 17, 19, 20, 21]);
 
   const state = loadState();
   let lossRows = [];
@@ -32,13 +37,15 @@
   let activeView = "unpaid";
   let searchTerm = "";
   let sourceFilter = "";
+  let toolsOpen = false;
   let searchRenderTimer = 0;
+  let refreshRunId = 0;
   const expandedGroups = new Set();
 
   GM_addStyle(`
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Sora:wght@400;600;700&display=swap');
 
-    /* ── Toggle Tab ── */
+    /* -- Toggle Tab -- */
     #tlet-toggle {
       position: fixed; right: 0; top: 50%; transform: translateY(-50%);
       z-index: 999998; width: 22px; height: 64px; border: 0;
@@ -51,25 +58,24 @@
     #tlet-toggle:hover { background: #252522; color: #f0efe8; }
     #tlet-toggle.tlet-attached { right: min(420px, calc(100vw - 40px)); z-index: 1000000; }
 
-    /* ── Panel Shell ── */
+    /* -- Panel Shell -- */
     #tlet-panel {
       position: fixed; right: 0; top: 0; bottom: 0; z-index: 999999;
       width: min(420px, calc(100vw - 32px)); display: flex; flex-direction: column;
       background: #181816; color: #e8e6de;
       box-shadow: -6px 0 32px rgba(0,0,0,.6); font: 13px/1.45 'Sora', sans-serif;
-      transform: translateX(calc(100% + 16px)); visibility: hidden; pointer-events: none;
-      transition: transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s linear .22s;
+      transform: translateX(calc(100% + 16px)); opacity: .98; pointer-events: none;
+      transition: transform .24s cubic-bezier(.2,.8,.2,1), opacity .18s ease;
       will-change: transform;
     }
     #tlet-panel.tlet-open {
-      transform: translateX(0); visibility: visible; pointer-events: auto;
-      transition: transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s;
+      transform: translateX(0); opacity: 1; pointer-events: auto;
     }
     #tlet-panel, #tlet-panel * {
       font-family: 'Sora', sans-serif !important; text-shadow: none !important; box-sizing: border-box;
     }
 
-    /* ── Header ── */
+    /* -- Header -- */
     .tlet-head {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 12px; border-bottom: 1px solid #2a2a27;
@@ -78,7 +84,7 @@
     .tlet-title { font-size: 15px; font-weight: 700; color: #f0efe8; letter-spacing: -.2px; }
     .tlet-head-actions { display: flex; gap: 5px; align-items: center; }
 
-    /* ── Buttons ── */
+    /* -- Buttons -- */
     .tlet-btn, .tlet-icon-btn {
       border: 1px solid #333330; border-radius: 5px; background: #222220;
       color: #d8d6ce; cursor: pointer; font: 600 12px 'Sora', sans-serif;
@@ -89,7 +95,7 @@
     .tlet-btn:hover, .tlet-icon-btn:hover { background: #2e2e2b; color: #f0efe8; }
     .tlet-icon-btn.active { background: #2a2a27; border-color: #555550; color: #f0efe8; }
 
-    /* ── Settings Drawer ── */
+    /* -- Settings Drawer -- */
     .tlet-settings {
       display: none; flex-direction: column; gap: 0;
       border-bottom: 1px solid #2a2a27; background: #0e0e0d; flex-shrink: 0;
@@ -118,10 +124,17 @@
     .tlet-input:focus { outline: none; border-color: #555550; }
     .tlet-input[type="password"] { font-weight: 400; letter-spacing: 2px; }
     .tlet-input::placeholder { color: #444440; font-weight: 400; letter-spacing: 0; }
+    .tlet-color-input {
+      width: 40px; height: 28px; border: 1px solid #2e2e2b; border-radius: 5px;
+      background: #1a1a18; padding: 2px; cursor: pointer;
+    }
+    .tlet-color-input::-webkit-color-swatch-wrapper { padding: 0; }
+    .tlet-color-input::-webkit-color-swatch { border: 0; border-radius: 3px; }
 
     .tlet-key-row { display: flex; gap: 6px; align-items: end; }
     .tlet-key-row .tlet-field { flex: 1; }
-    .tlet-backup-row, .tlet-source-manage-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .tlet-backup-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .tlet-source-manage-row { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 6px; }
     .tlet-source-manage-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
     .tlet-key-status {
@@ -134,14 +147,14 @@
     .tlet-key-dot.set { background: #5ec47a; }
     .tlet-key-text { color: #666460; }
 
-    /* ── Config Bar ── */
+    /* -- Config Bar -- */
     .tlet-config {
-      display: grid; grid-template-columns: 72px 96px 106px 32px;
+      display: grid; grid-template-columns: 72px 96px 106px 68px;
       gap: 6px; padding: 8px 12px; border-bottom: 1px solid #2a2a27;
       background: #111110; flex-shrink: 0; align-items: end;
     }
 
-    /* ── Summary Bar ── */
+    /* -- Summary Bar -- */
     .tlet-summary {
       display: grid; grid-template-columns: repeat(4, 1fr);
       border-bottom: 1px solid #2a2a27; flex-shrink: 0;
@@ -156,7 +169,7 @@
     #tlet-outstanding { color: #e8a020; }
     #tlet-paid-stat   { color: #5ec47a; }
 
-    /* ── View Tabs ── */
+    /* -- View Tabs -- */
     .tlet-view-tabs {
       display: grid; grid-template-columns: repeat(3, 1fr);
       gap: 6px; padding: 8px 12px; border-bottom: 1px solid #2a2a27;
@@ -171,42 +184,52 @@
     .tlet-view-tab:hover { background: #252522; color: #d8d6ce; }
     .tlet-view-tab.active { background: #2a2a27; color: #f0efe8; border-color: #555550; }
 
-    /* ── Filters and Bulk Actions ── */
+    /* -- Filters and Bulk Actions -- */
+    .tlet-tools-toggle {
+      padding: 7px 12px; border-bottom: 1px solid #2a2a27;
+      background: #111110; flex-shrink: 0;
+    }
+    .tlet-tools-toggle .tlet-btn {
+      width: 100%; display: flex; align-items: center; justify-content: space-between;
+      text-transform: uppercase; letter-spacing: .4px; color: #aaa8a0;
+    }
+    .tlet-tools-toggle .tlet-btn::after { content: "Open"; color: #555550; font-size: 10px; }
+    .tlet-tools-toggle .tlet-btn.active::after { content: "Close"; color: #888680; }
+    .tlet-tools { display: none; background: #111110; border-bottom: 1px solid #2a2a27; flex-shrink: 0; }
+    .tlet-tools.open { display: block; }
     .tlet-filter-bar {
       display: grid; grid-template-columns: 1fr 92px; gap: 6px;
-      padding: 8px 12px; border-bottom: 1px solid #2a2a27;
-      background: #111110; flex-shrink: 0;
+      padding: 8px 12px 6px; background: #111110;
     }
     .tlet-bulk-bar {
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
-      padding: 0 12px 8px; border-bottom: 1px solid #2a2a27;
-      background: #111110; flex-shrink: 0;
+      padding: 0 12px 8px; background: #111110;
     }
     .tlet-btn.danger { background: #321616; color: #f0a0a0; }
     .tlet-btn.success { background: #16321f; color: #5ec47a; }
     .tlet-btn.blue { background: #162535; color: #90c0f0; }
 
-    /* ── Due Banner ── */
+    /* -- Due Banner -- */
     .tlet-due {
       padding: 5px 12px; border-bottom: 1px solid #2a2a27;
       font-size: 12px; font-weight: 600; color: #666460; flex-shrink: 0;
     }
     .tlet-due-amount { color: #e8a020; font-weight: 700; font-family: 'JetBrains Mono', monospace !important; }
 
-    /* ── Status ── */
+    /* -- Status -- */
     .tlet-status {
       padding: 4px 12px; font-size: 11px; color: #555550;
       border-bottom: 1px solid #2a2a27; flex-shrink: 0; min-height: 20px;
       display: flex; align-items: center;
     }
 
-    /* ── Scrollable Body ── */
+    /* -- Scrollable Body -- */
     .tlet-body { overflow-y: auto; flex: 1; }
     .tlet-body::-webkit-scrollbar { width: 4px; }
     .tlet-body::-webkit-scrollbar-track { background: #111110; }
     .tlet-body::-webkit-scrollbar-thumb { background: #333330; border-radius: 2px; }
 
-    /* ── Date Sections ── */
+    /* -- Date Sections -- */
     .tlet-date-section {
       display: flex; align-items: center; justify-content: space-between;
       padding: 8px 12px 6px; background: #111110; border-bottom: 1px solid #242421;
@@ -218,7 +241,7 @@
       letter-spacing: 0; text-transform: none;
     }
 
-    /* ── Contract Row ── */
+    /* -- Contract Row -- */
     .tlet-contract { border-bottom: 1px solid #252523; }
     .tlet-contract:last-child { border-bottom: 0; }
     .tlet-contract:nth-child(odd) .tlet-contract-head { background: #222220; }
@@ -266,7 +289,7 @@
     .tlet-chevron { color: #444440; font-size: 10px; transition: transform .15s; }
     .tlet-chevron.open { transform: rotate(180deg); color: #888680; }
 
-    /* ── Expanded Body ── */
+    /* -- Expanded Body -- */
     .tlet-contract-body {
       display: none; flex-direction: column; gap: 8px;
       padding: 8px 12px 10px; border-top: 1px solid #2a2a27; background: #111110;
@@ -298,15 +321,21 @@
     .tlet-mark-btn.mark-remove { background: #3a1616; color: #f0a0a0; }
     .tlet-mark-btn.mark-restore { background: #162535; color: #90c0f0; }
 
-    /* ── Attack Log ── */
+    /* -- Attack Log -- */
     .tlet-log { border-top: 1px solid #222220; padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
     .tlet-log-row {
-      display: grid; grid-template-columns: 64px 1fr auto; gap: 6px;
+      display: grid; grid-template-columns: 64px 1fr auto auto; gap: 6px;
       align-items: center; padding: 3px 0; font-size: 11px; color: #666460; font-weight: 600;
     }
     .tlet-log-time { font-family: 'JetBrains Mono', monospace !important; font-size: 11px; color: #555550; }
     .tlet-log-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tlet-log-amt  { font-family: 'JetBrains Mono', monospace !important; color: #aaa8a0; font-weight: 700; white-space: nowrap; }
+    .tlet-log-action {
+      height: 22px; padding: 0 7px; border: 0; border-radius: 3px; cursor: pointer;
+      font: 700 9px 'Sora', sans-serif !important; text-transform: uppercase; white-space: nowrap;
+    }
+    .tlet-log-action.mark-paid { background: #1a3d28; color: #5ec47a; }
+    .tlet-log-action.mark-unpaid { background: #2a1e04; color: #e8a020; }
 
     /* Source tag */
     .tlet-source-tag {
@@ -317,7 +346,7 @@
 
     .tlet-empty { padding: 32px 16px; text-align: center; color: #444440; font-size: 13px; font-weight: 600; }
 
-    /* ── Settings divider ── */
+    /* -- Settings divider -- */
     .tlet-settings-sep {
       height: 1px; background: #1e1e1c; margin: 0 12px;
     }
@@ -337,7 +366,7 @@
 
   buildShell();
 
-  /* ─── UI SHELL ─── */
+  /* --- UI SHELL --- */
 
   function buildShell() {
     const toggle = document.createElement("button");
@@ -353,9 +382,9 @@
       <div class="tlet-head">
         <div class="tlet-title">LE Tracker</div>
         <div class="tlet-head-actions">
-          <button class="tlet-btn" id="tlet-refresh" type="button">↻ Refresh</button>
-          <button class="tlet-icon-btn" id="tlet-settings-btn" type="button" title="Settings">⚙</button>
-          <button class="tlet-icon-btn" id="tlet-close" type="button" title="Close">✕</button>
+          <button class="tlet-btn" id="tlet-refresh" type="button">Refresh</button>
+          <button class="tlet-icon-btn" id="tlet-settings-btn" type="button" title="Settings">&#9881;</button>
+          <button class="tlet-icon-btn" id="tlet-close" type="button" title="Close">&times;</button>
         </div>
       </div>
 
@@ -378,6 +407,7 @@
           <div class="tlet-settings-title">Sources</div>
           <div class="tlet-source-manage-row">
             <select id="tlet-source-manage" class="tlet-input tlet-source-select"></select>
+            <input id="tlet-source-color" class="tlet-color-input" type="color" title="Source color" />
             <div class="tlet-source-manage-actions">
               <button class="tlet-btn" id="tlet-rename-source" type="button">Rename</button>
               <button class="tlet-btn danger" id="tlet-delete-source" type="button">Delete</button>
@@ -407,7 +437,7 @@
           <label>Escape $</label>
           <input id="tlet-escape-rate" class="tlet-input" type="number" min="0" step="50000" />
         </div>
-        <button class="tlet-icon-btn" id="tlet-load" type="button" title="Refresh latest rows" style="align-self:end">?</button>
+        <button class="tlet-btn" id="tlet-load" type="button" title="Refresh latest rows" style="align-self:end">Refresh</button>
       </div>
 
       <!-- Summary -->
@@ -436,14 +466,19 @@
         <button class="tlet-view-tab" data-view="removed" type="button">Removed</button>
       </div>
 
-      <div class="tlet-filter-bar">
-        <input id="tlet-search" class="tlet-input" type="search" placeholder="Search name or ID" />
-        <select id="tlet-source-filter" class="tlet-input tlet-source-select"></select>
+      <div class="tlet-tools-toggle">
+        <button class="tlet-btn" id="tlet-tools-toggle" type="button">Search / Bulk</button>
       </div>
-      <div class="tlet-bulk-bar">
-        <button class="tlet-btn success" id="tlet-bulk-paid" type="button">Mark Paid</button>
-        <button class="tlet-btn danger" id="tlet-bulk-remove" type="button">Remove</button>
-        <button class="tlet-btn blue" id="tlet-bulk-restore" type="button">Restore</button>
+      <div class="tlet-tools" id="tlet-tools-panel">
+        <div class="tlet-filter-bar">
+          <input id="tlet-search" class="tlet-input" type="search" placeholder="Search name or ID" />
+          <select id="tlet-source-filter" class="tlet-input tlet-source-select"></select>
+        </div>
+        <div class="tlet-bulk-bar">
+          <button class="tlet-btn success" id="tlet-bulk-paid" type="button">Mark Paid</button>
+          <button class="tlet-btn danger" id="tlet-bulk-remove" type="button">Remove</button>
+          <button class="tlet-btn blue" id="tlet-bulk-restore" type="button">Restore</button>
+        </div>
       </div>
 
       <div class="tlet-due" id="tlet-due" style="display:none"></div>
@@ -465,6 +500,7 @@
     rowLimitInput.value = String(rowLimit());
 
     updateKeyStatus();
+    updateToolsPanel();
 
     document.getElementById("tlet-save-key").addEventListener("click", () => {
       state.apiKey = keyInput.value.trim();
@@ -487,6 +523,15 @@
     document
       .getElementById("tlet-delete-source")
       .addEventListener("click", deleteSelectedSource);
+    document
+      .getElementById("tlet-source-manage")
+      .addEventListener("change", updateSourceColorInput);
+    document
+      .getElementById("tlet-source-color")
+      .addEventListener("input", updateSelectedSourceColor);
+    document
+      .getElementById("tlet-tools-toggle")
+      .addEventListener("click", toggleTools);
     document.getElementById("tlet-search").addEventListener("input", (e) => {
       searchTerm = String(e.target.value || "").trim().toLowerCase();
       expandedGroups.clear();
@@ -587,6 +632,19 @@
     if (settingsOpen) document.getElementById("tlet-key").focus();
   }
 
+  function toggleTools() {
+    toolsOpen = !toolsOpen;
+    updateToolsPanel();
+    if (toolsOpen) document.getElementById("tlet-search").focus();
+  }
+
+  function updateToolsPanel() {
+    const panel = document.getElementById("tlet-tools-panel");
+    const btn = document.getElementById("tlet-tools-toggle");
+    if (panel) panel.classList.toggle("open", toolsOpen);
+    if (btn) btn.classList.toggle("active", toolsOpen);
+  }
+
   function togglePanel() {
     isOpen = !isOpen;
     document.getElementById("tlet-panel").classList.toggle("tlet-open", isOpen);
@@ -680,56 +738,88 @@
     if (sourceFilterInput) sourceFilterInput.value = sourceFilter;
   }
 
-  /* ─── DATA FETCH ─── */
+  /* --- DATA FETCH --- */
 
   async function refreshLosses() {
-    const key =
-      state.apiKey || document.getElementById("tlet-key").value.trim();
+    const runId = ++refreshRunId;
+    const keyInput = document.getElementById("tlet-key");
+    const rowLimitInput = document.getElementById("tlet-row-limit");
+    const key = (keyInput && keyInput.value.trim()) || state.apiKey;
+
     if (!key) {
-      setStatus("No API key ? open ? Settings to add one.");
+      setStatus("No API key - open Settings to add one.");
       if (!settingsOpen) toggleSettings();
       return;
     }
 
-    setStatus("Refreshing latest rows?");
+    state.rowLimit = clampRowLimit(rowLimitInput && rowLimitInput.value);
+    if (rowLimitInput) rowLimitInput.value = String(state.rowLimit);
+    saveState();
+
+    setRefreshBusy(true);
+    setStatus("Refreshing latest " + state.rowLimit + " attacks...");
+
     try {
-      state.rowLimit = rowLimit();
-      saveState();
+      const result = await loadLatestRows(key, state.rowLimit);
+      if (runId !== refreshRunId) return;
 
-      const limit = rowLimit();
-      const [outgoingData, legacyData] = await Promise.all([
-        fetchLatestOutgoingAttacks(key, limit),
-        fetchLegacyAttacks(key),
-      ]);
-
-      const attacks = mergeAttackDetails(
-        tagDirection(outgoingData.attacks, "outgoing"),
-        tagDirection(legacyData.attacks, "outgoing"),
-      )
-        .sort((a, b) => attackTimestamp(b) - attackTimestamp(a))
-        .slice(0, limit);
-
-      const fetchedRows = dedupeAttacks(attacks)
-        .map((attack) => normalizeAttack(attack, attack.__tletDirection))
-        .filter(isBillableAction)
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, limit);
-
-      lossRows = dedupeRows(fetchedRows);
-      await hydrateMissingNames(key, lossRows, false);
+      lossRows = result.rows;
       cacheBillableRows(lossRows, false);
       saveState();
       includesEarlierUnpaid = false;
-      setStatus(
-        lossRows.length +
-          " billable attacks loaded from " +
-          attacks.length +
-          " latest API rows.",
-      );
       render();
+      setStatus(
+        "Loaded " +
+          lossRows.length +
+          " billable rows from " +
+          result.total +
+          " latest attacks at " +
+          formatClock(new Date()) +
+          ".",
+      );
     } catch (err) {
-      setStatus("Error: " + err.message);
+      if (runId === refreshRunId) setStatus("Error: " + err.message);
+    } finally {
+      if (runId === refreshRunId) setRefreshBusy(false);
     }
+  }
+
+  async function loadLatestRows(apiKey, limit) {
+    const outgoingData = await fetchLatestOutgoingAttacks(apiKey, limit);
+    let legacyData = { attacks: [] };
+    try {
+      legacyData = await fetchLegacyAttacks(apiKey);
+    } catch (err) {
+      console.warn("[TLET] Legacy attacks lookup failed; continuing with v2 rows only.", err);
+    }
+
+    const attacks = mergeAttackDetails(
+      tagDirection(outgoingData.attacks, "outgoing"),
+      tagDirection(legacyData.attacks, "outgoing"),
+    )
+      .filter(isSupportedAttackRecord)
+      .filter((attack) => !isNpcAttack(attack))
+      .sort((a, b) => attackTimestamp(b) - attackTimestamp(a))
+      .slice(0, limit);
+
+    const rows = dedupeRows(
+      attacks
+        .map((attack) => normalizeAttack(attack, attack.__tletDirection || "outgoing"))
+        .filter(isBillableAction)
+        .sort((a, b) => b.timestamp - a.timestamp),
+    );
+
+    await hydrateMissingNames(apiKey, rows, false);
+    return { rows, total: outgoingData.attacks.length };
+  }
+
+  function setRefreshBusy(isBusy) {
+    ["tlet-refresh", "tlet-load"].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.disabled = isBusy;
+      btn.textContent = isBusy ? "Loading" : "Refresh";
+    });
   }
 
   async function fetchLatestOutgoingAttacks(apiKey, limit) {
@@ -739,14 +829,11 @@
       encodeURIComponent(limit) +
       "&key=" +
       encodeURIComponent(apiKey) +
-      "&comment=le-tracker";
+      "&comment=" +
+      encodeURIComponent(apiComment());
     const data = await requestJson(url);
-    if (data.error) {
-      throw new Error(data.error.code + ": " + (data.error.error || "Torn API error"));
-    }
-    return {
-      attacks: extractAttacks(data),
-    };
+    assertTornOk(data);
+    return { attacks: extractAttacks(data) };
   }
 
   async function fetchLegacyAttacks(apiKey) {
@@ -754,14 +841,21 @@
       API_V1_BASE +
       "/user/?selections=attacks&key=" +
       encodeURIComponent(apiKey) +
-      "&comment=LETracker";
+      "&comment=" +
+      encodeURIComponent(apiComment());
     const data = await requestJson(url);
-    if (data.error) {
+    assertTornOk(data);
+    return { attacks: extractAttacks(data) };
+  }
+
+  function assertTornOk(data) {
+    if (data && data.error) {
       throw new Error(data.error.code + ": " + (data.error.error || "Torn API error"));
     }
-    return {
-      attacks: extractAttacks(data),
-    };
+  }
+
+  function apiComment() {
+    return "LETracker-" + Date.now();
   }
 
   function extractAttacks(data) {
@@ -796,8 +890,6 @@
         attack && attack.id,
         attack && attack.attack_id,
         attack && attack.code,
-        attack && attack.timestamp_started,
-        attack && attack.started,
       ) || "",
     );
   }
@@ -805,14 +897,27 @@
   function attackTimestamp(attack) {
     return Number(
       firstValue(
+        attack && attack.ended,
+        attack && attack.timestamp_ended,
         attack && attack.started,
         attack && attack.start,
         attack && attack.timestamp_started,
         attack && attack.timestamp,
-        attack && attack.ended,
-        attack && attack.timestamp_ended,
       ) || 0,
     );
+  }
+
+  function isSupportedAttackRecord(attack) {
+    const result = normalizedAttackResult(attack).replace(/[_-]/g, " ");
+    return result === "lost" || result === "loss" || result === "timeout" || result.includes("escape");
+  }
+
+  function isNpcAttack(attack) {
+    const attacker = firstObject(attack && attack.attacker);
+    const defender = firstObject(attack && attack.defender);
+    const attackerId = Number(firstValue(attacker.id, attack && attack.attacker_id));
+    const defenderId = Number(firstValue(defender.id, attack && attack.defender_id));
+    return NPC_IDS.has(attackerId) || NPC_IDS.has(defenderId);
   }
 
   function tagDirection(attacks, direction) {
@@ -852,11 +957,12 @@
     );
     const result = normalizedAttackResult(attack);
     const timestamp =
+      attack.ended ||
+      attack.timestamp_ended ||
       attack.started ||
       attack.start ||
       attack.timestamp_started ||
       attack.timestamp ||
-      attack.ended ||
       attack.end ||
       0;
     const defenderId = firstValue(
@@ -933,7 +1039,11 @@
   function isLoss(row) {
     const r = row.result.replace(/[_-]/g, " ");
     return (
-      r === "lost" || r === "loss" || r.includes("lost") || r.includes("defeat")
+      r === "lost" ||
+      r === "loss" ||
+      r === "timeout" ||
+      r.includes("lost") ||
+      r.includes("defeat")
     );
   }
   function isEscape(row) {
@@ -1015,7 +1125,7 @@
       : Number(state.defaultRate) || DEFAULT_RATE;
   }
 
-  /* ─── RENDER ─── */
+  /* --- RENDER --- */
 
   function enrichedRows(rows = lossRows) {
     return rows.map((row) => {
@@ -1033,13 +1143,16 @@
     });
   }
 
+  function currentRows() {
+    return enrichedRows();
+  }
+
   function currentGroups() {
-    return buildGroups(enrichedRows());
+    return buildGroups(currentRows());
   }
 
   function visibleGroups() {
-    return currentGroups()
-      .filter(groupMatchesActiveView)
+    return buildGroups(currentRows().filter(rowMatchesActiveView))
       .filter(groupMatchesFilters);
   }
 
@@ -1107,14 +1220,15 @@
       manager.innerHTML = sourceManageOptionsHtml(current);
       if (current) manager.value = current;
     }
+    updateSourceColorInput();
   }
 
-  function groupMatchesActiveView(group) {
-    const removed = isRemovedGroup(group);
+  function rowMatchesActiveView(row) {
+    const removed = isRemovedRow(row);
     if (activeView === "removed") return removed;
     if (removed) return false;
-    if (activeView === "paid") return group.outstanding <= 0;
-    return group.outstanding > 0;
+    if (activeView === "paid") return row.outstanding <= 0;
+    return row.outstanding > 0;
   }
 
   function groupMatchesFilters(group) {
@@ -1143,6 +1257,16 @@
 
   function handleTableClick(event) {
     const target = event.target;
+    const rowPaidBtn = target.closest && target.closest("[data-row-paid-toggle]");
+    if (rowPaidBtn) {
+      event.stopPropagation();
+      updateRowPaidToggle(
+        rowPaidBtn.dataset.rowPaidToggle,
+        rowPaidBtn.dataset.isPaid !== "true",
+      );
+      return;
+    }
+
     const paidBtn = target.closest && target.closest("[data-paid-toggle]");
     if (paidBtn) {
       event.stopPropagation();
@@ -1214,10 +1338,10 @@
     if (activeView === "removed") {
       return '<div class="tlet-empty">No removed contracts for this view.</div>';
     }
-    return '<div class="tlet-empty">No unpaid losses loaded.<br>Set your API key (⚙) and press refresh.</div>';
+    return '<div class="tlet-empty">No unpaid losses loaded.<br>Set your API key in Settings and press refresh.</div>';
   }
 
-  /* ─── GROUP BUILD ─── */
+  /* --- GROUP BUILD --- */
 
   function buildGroups(rows) {
     const map = new Map();
@@ -1237,6 +1361,10 @@
           escapeCount: 0,
           lossExpected: 0,
           escapeExpected: 0,
+          lossOutstandingCount: 0,
+          escapeOutstandingCount: 0,
+          lossOutstanding: 0,
+          escapeOutstanding: 0,
           expected: 0,
           paid: 0,
           removedCount: 0,
@@ -1247,12 +1375,21 @@
 
       const g = map.get(gKey);
       g.rows.push(row);
+      const outstanding = Math.max(0, Number(row.outstanding || 0));
       if (row.kind === "escape") {
         g.escapeCount++;
         g.escapeExpected += row.expected;
+        if (outstanding > 0) {
+          g.escapeOutstandingCount++;
+          g.escapeOutstanding += outstanding;
+        }
       } else {
         g.lossCount++;
         g.lossExpected += row.expected;
+        if (outstanding > 0) {
+          g.lossOutstandingCount++;
+          g.lossOutstanding += outstanding;
+        }
       }
       g.expected += row.expected;
       g.paid += row.paid;
@@ -1275,7 +1412,7 @@
       .sort((a, b) => b.firstTimestamp - a.firstTimestamp);
   }
 
-  /* ─── GROUP HTML ─── */
+  /* --- GROUP HTML --- */
 
   function groupsByDateHtml(groups) {
     const chunks = [];
@@ -1309,7 +1446,7 @@
 
     return `
       <div class="tlet-date-section">
-        <span>${escapeHtml(day)} · ${count} ${count === 1 ? "record" : "records"}</span>
+        <span>${escapeHtml(day)} &middot; ${count} ${count === 1 ? "record" : "records"}</span>
         <span class="tlet-date-total">${escapeHtml(money(total))}</span>
       </div>
       ${groups.map(groupHtml).join("")}
@@ -1345,11 +1482,16 @@
         : "",
     ].join("");
 
+    const showOutstanding = activeView === "unpaid" && !isRemoved;
+    const formulaTotal = showOutstanding ? group.outstanding : group.expected;
+    const rowAmount = showOutstanding ? group.outstanding : group.expected;
     const formulaParts = [];
-    if (group.lossCount > 0)
-      formulaParts.push(`${group.lossCount} × ${money(lossRate)}`);
-    if (group.escapeCount > 0)
-      formulaParts.push(`${group.escapeCount} × ${money(escapeRate)}`);
+    const lossFormulaCount = showOutstanding ? group.lossOutstandingCount : group.lossCount;
+    const escapeFormulaCount = showOutstanding ? group.escapeOutstandingCount : group.escapeCount;
+    if (lossFormulaCount > 0)
+      formulaParts.push(`${lossFormulaCount} x ${money(lossRate)}`);
+    if (escapeFormulaCount > 0)
+      formulaParts.push(`${escapeFormulaCount} x ${money(escapeRate)}`);
 
     const idBit = group.defenderId
       ? ` <span style="color:#555550;font-size:11px;font-weight:400">[${escapeHtml(group.defenderId)}]</span>`
@@ -1359,13 +1501,13 @@
       <div class="tlet-contract">
         <div class="tlet-contract-head" data-expand="${gId}">
           <div style="min-width:0">
-            <div class="tlet-target-name">${note ? `<span class="tlet-source-tag">${escapeHtml(note)}</span>` : ""}${targetHtml}${idBit}</div>
-            <div class="tlet-target-meta">${escapeHtml(group.day)} · ${escapeHtml(compactTimeRange(group.lastTimestamp, group.firstTimestamp))}</div>
+            <div class="tlet-target-name">${sourceTagHtml(note)}${targetHtml}${idBit}</div>
+            <div class="tlet-target-meta">${escapeHtml(group.day)} &middot; ${escapeHtml(compactTimeRange(group.lastTimestamp, group.firstTimestamp))}</div>
           </div>
           <div class="tlet-pills">${pillsHtml}</div>
           <div class="tlet-badge ${isRemoved ? "tlet-badge-unpaid" : isPaid ? "tlet-badge-paid" : "tlet-badge-unpaid"}">${isRemoved ? "Removed" : isPaid ? "Paid" : "Unpaid"}</div>
-          <div class="tlet-row-amount">${escapeHtml(money(group.expected))}</div>
-          <div class="tlet-chevron${isExpanded ? " open" : ""}">▼</div>
+          <div class="tlet-row-amount">${escapeHtml(money(rowAmount))}</div>
+          <div class="tlet-chevron${isExpanded ? " open" : ""}">&#9660;</div>
         </div>
 
         <div class="tlet-contract-body${isExpanded ? " open" : ""}">
@@ -1379,7 +1521,7 @@
               ${sourceSelectHtml(gId, note)}
             </div>
             <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
-              <div class="tlet-formula">${escapeHtml(formulaParts.join(" + "))} = <span class="tlet-formula-total">${escapeHtml(money(group.expected))}</span></div>
+              <div class="tlet-formula">${escapeHtml(formulaParts.join(" + "))} = <span class="tlet-formula-total">${escapeHtml(money(formulaTotal))}</span></div>
               ${groupActionsHtml(group, isPaid, isRemoved)}
             </div>
           </div>
@@ -1397,11 +1539,13 @@
       row.raw && row.raw.energy,
       25,
     );
+    const isPaid = Number(row.outstanding || 0) <= 0;
     return `
       <div class="tlet-log-row">
         <span class="tlet-log-time">${escapeHtml(formatTime(row.timestamp))}</span>
-        <span class="tlet-log-desc">${escapeHtml(energy)}e → ${escapeHtml(row.defenderName)}</span>
+        <span class="tlet-log-desc">${escapeHtml(energy)}e -&gt; ${escapeHtml(row.defenderName)}</span>
         <span class="tlet-log-amt">${escapeHtml(money(row.expected))}</span>
+        <button class="tlet-log-action ${isPaid ? "mark-unpaid" : "mark-paid"}" data-row-paid-toggle="${escapeAttr(row.id)}" data-is-paid="${isPaid}" type="button">${isPaid ? "Unpaid" : "Paid"}</button>
       </div>
     `;
   }
@@ -1448,14 +1592,14 @@
     return `
       <div style="display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap">
         <button class="tlet-mark-btn ${isPaid ? "mark-unpaid" : "mark-paid"}" data-paid-toggle="${gId}" data-is-paid="${isPaid}" type="button">
-          ${isPaid ? "Mark Unpaid" : "Mark Paid"}
+          ${isPaid ? "Mark Unpaid" : "Mark All As Paid"}
         </button>
         <button class="tlet-mark-btn mark-remove" data-remove-group="${gId}" type="button">Remove</button>
       </div>
     `;
   }
 
-  /* ─── STATE UPDATES ─── */
+  /* --- STATE UPDATES --- */
 
   function getPayRecord(id, row) {
     if (!state.payments[id])
@@ -1468,6 +1612,43 @@
 
   function getGroupNote(groupId) {
     return normalizeSourceCode((state.groupNotes || {})[groupId]);
+  }
+
+  function sourceTagHtml(code) {
+    const normalized = normalizeSourceCode(code);
+    if (!normalized) return "";
+    const color = sourceColor(normalized);
+    return `<span class="tlet-source-tag" style="background:${escapeAttr(colorWithAlpha(color, 0.22))};color:${escapeAttr(color)}">${escapeHtml(normalized)}</span>`;
+  }
+
+  function sourceColor(code) {
+    const normalized = normalizeSourceCode(code);
+    return (
+      normalizeHexColor(state.sourceColors && state.sourceColors[normalized]) ||
+      DEFAULT_SOURCE_COLORS[normalized] ||
+      "#c8901a"
+    );
+  }
+
+  function updateSourceColorInput() {
+    const select = document.getElementById("tlet-source-manage");
+    const input = document.getElementById("tlet-source-color");
+    if (!select || !input) return;
+    const code = normalizeSourceCode(select.value);
+    input.disabled = !code;
+    input.value = sourceColor(code || "BHG");
+  }
+
+  function updateSelectedSourceColor(event) {
+    const select = document.getElementById("tlet-source-manage");
+    const code = normalizeSourceCode(select && select.value);
+    const color = normalizeHexColor(event && event.target && event.target.value);
+    if (!code || !color) return;
+    state.sourceColors = plainObject(state.sourceColors) ? state.sourceColors : {};
+    state.sourceColors[code] = color;
+    saveState();
+    render();
+    setStatus(`Source ${code} color saved.`);
   }
 
   function allSourceCodes() {
@@ -1593,6 +1774,31 @@
     render();
   }
 
+  function normalizeHexColor(value) {
+    const color = String(value || "").trim();
+    return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "";
+  }
+
+  function normalizeSourceColors(value) {
+    const colors = {};
+    if (!plainObject(value)) return colors;
+    Object.keys(value).forEach((code) => {
+      const normalizedCode = normalizeSourceCode(code);
+      const color = normalizeHexColor(value[code]);
+      if (normalizedCode && color) colors[normalizedCode] = color;
+    });
+    return colors;
+  }
+
+  function colorWithAlpha(hex, alpha) {
+    const color = normalizeHexColor(hex) || "#c8901a";
+    const n = parseInt(color.slice(1), 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, Number(alpha) || 0))})`;
+  }
+
   function normalizeSourceCode(value) {
     const code = String(value || "")
       .trim()
@@ -1613,7 +1819,6 @@
   function removeGroup(groupId) {
     const group = currentGroup(groupId);
     if (!group) return;
-    if (!window.confirm("Remove contract for " + group.defenderName + "?")) return;
     state.removedRows = plainObject(state.removedRows) ? state.removedRows : {};
     group.rows.forEach((row) => {
       state.removedRows[row.id] = Date.now();
@@ -1636,7 +1841,7 @@
   }
 
   function currentGroup(groupId) {
-    return currentGroups().find((g) => g.id === groupId);
+    return visibleGroups().find((g) => g.id === groupId);
   }
 
   function markVisiblePaid() {
@@ -1688,11 +1893,25 @@
   function updateGroupPaidToggle(groupId, isPaid) {
     const group = currentGroup(groupId);
     if (!group) return;
-    const action = isPaid ? "Mark paid" : "Mark unpaid";
-    if (!window.confirm(action + " for " + group.defenderName + "?")) return;
     distributeGroupMoney(group.rows, "paid", isPaid ? group.expected : 0);
     saveState();
     render();
+    setStatus(isPaid ? "Contract marked paid." : "Contract marked unpaid.");
+  }
+
+  function updateRowPaidToggle(rowId, isPaid) {
+    const row = currentRow(rowId);
+    if (!row) return;
+    const rec = getPayRecord(row.id, row);
+    const expected = rec.expected == null ? defaultExpectedFor(row) : Number(rec.expected);
+    rec.paid = isPaid ? expected : 0;
+    saveState();
+    render();
+    setStatus(isPaid ? "Record marked paid." : "Record marked unpaid.");
+  }
+
+  function currentRow(rowId) {
+    return currentRows().find((row) => String(row.id) === String(rowId));
   }
 
   function updateGroupRate(groupId, kind, value) {
@@ -1733,7 +1952,7 @@
     });
   }
 
-  /* ─── NAME HYDRATE ─── */
+  /* --- NAME HYDRATE --- */
 
   async function hydrateMissingNames(apiKey, rows, shouldSave = true) {
     state.nameCache = plainObject(state.nameCache) ? state.nameCache : {};
@@ -1811,6 +2030,10 @@
         url,
         timeout: 20000,
         onload: (r) => {
+          if (r.status && (r.status < 200 || r.status >= 300)) {
+            reject(new Error("HTTP " + r.status));
+            return;
+          }
           try {
             resolve(JSON.parse(r.responseText));
           } catch (e) {
@@ -1875,6 +2098,7 @@
       nameCache: plainObject(saved.nameCache) ? saved.nameCache : {},
       groupNotes: plainObject(saved.groupNotes) ? saved.groupNotes : {},
       billableRows: plainObject(saved.billableRows) ? saved.billableRows : {},
+      sourceColors: normalizeSourceColors(saved.sourceColors),
       removedRows: plainObject(saved.removedRows) ? saved.removedRows : {},
       lookbackDays: clampLookbackDays(saved.lookbackDays),
       rowLimit: clampRowLimit(saved.rowLimit),
@@ -1894,6 +2118,14 @@
   function money(value) {
     return `$${Math.round(Number(value) || 0).toLocaleString()}`;
   }
+  function formatClock(date) {
+    return date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
   function formatTime(ts) {
     if (!ts) return "—";
     return new Date(ts * 1000).toLocaleTimeString([], {
@@ -1905,7 +2137,7 @@
   function compactTimeRange(from, to) {
     return from === to
       ? formatTime(from)
-      : `${formatTime(from)} – ${formatTime(to)}`;
+      : `${formatTime(from)} - ${formatTime(to)}`;
   }
   function formatDayKey(ts) {
     if (!ts) return "Unknown";
