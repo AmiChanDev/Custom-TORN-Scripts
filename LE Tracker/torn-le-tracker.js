@@ -1,6 +1,6 @@
 ﻿// ==UserScript==
-// @name         Torn LE Tracker
-// @namespace    torn-LE-tracker
+// @name         Torn LE Tracker @AmrisG
+// @namespace    torn-LE-tracker @AmrisG
 // @version      3.2.0
 // @description  Compact loss/escape tracking panel with local payment tracking.
 // @author       AmrisG
