@@ -41,7 +41,7 @@
         document.head.appendChild(style);
     };
 
-    GM_addStyle(`.btn-wrap.torn-bazaar-fill-qty-price{float:right;margin-left:auto;z-index:99999}.btn-wrap.torn-bazaar-clear-qty-price{z-index:99999}.btn-wrap.torn-bazaar-update-all-prices{display:inline-block;margin-left:10px;z-index:99999}div.title-wrap div.name-wrap{display:flex;justify-content:flex-end}.wave-animation{position:relative;overflow:hidden}.wave{pointer-events:none;position:absolute;width:100%;height:33px;background-color:transparent;opacity:0;transform:translateX(-100%);animation:waveAnimation 1s cubic-bezier(0, 0, 0, 1)}@keyframes waveAnimation{0%{opacity:1;transform:translateX(-100%)}100%{opacity:0;transform:translateX(100%)}}.overlay-percentage{position:absolute;top:0;background-color:rgba(0, 0, 0, 0.9);padding:0 5px;border-radius:15px;font-size:10px}.overlay-percentage-add{right:-30px}.overlay-percentage-manage{right:0}`);
+    GM_addStyle(`.btn-wrap.torn-bazaar-fill-qty-price{float:right;margin-left:auto;z-index:99999}.btn-wrap.torn-bazaar-clear-qty-price{z-index:99999}.btn-wrap.torn-bazaar-update-all-prices{display:inline-block;margin-left:10px;z-index:99999}div.title-wrap div.name-wrap{display:flex;justify-content:flex-end}.wave-animation{position:relative;overflow:hidden}.wave{pointer-events:none;position:absolute;width:100%;height:33px;background-color:transparent;opacity:0;transform:translateX(-100%);animation:waveAnimation 1s cubic-bezier(0, 0, 0, 1)}@keyframes waveAnimation{0%{opacity:1;transform:translateX(-100%)}100%{opacity:0;transform:translateX(100%)}}.overlay-percentage{position:absolute;top:0;background-color:rgba(0, 0, 0, 0.9);padding:0 5px;border-radius:15px;font-size:10px}.overlay-percentage-add{right:-30px}.overlay-percentage-manage{right:0}.torn-bazaar-price-dataset{display:inline-block;margin-left:6px;color:#9fd6ff;background:rgba(0,0,0,.65);border:1px solid rgba(159,214,255,.35);border-radius:3px;padding:0 3px;font-size:10px;line-height:14px;cursor:help;vertical-align:middle;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}.torn-bazaar-price-dataset::after{content:attr(data-detail);display:none;position:fixed;right:14px;top:106px;max-width:430px;white-space:normal;background:rgba(0,0,0,.94);color:#d7edff;border:1px solid rgba(159,214,255,.45);border-radius:4px;padding:6px 8px;z-index:999999;line-height:13px}.torn-bazaar-price-dataset:hover::after{display:block}`);
 
     const pages = { "AddItems": 10, "ManageItems": 20};
     const addItemsLabels = ["Fill", "Clear"];
@@ -280,6 +280,63 @@
         return moneyGroupDiv.querySelector("span.overlay-percentage");
     }
 
+    function insertDatasetSpan(container, triggerElement) {
+        let datasetParent = null;
+
+        if (triggerElement) {
+            datasetParent = triggerElement.parentElement?.parentElement?.parentElement || null;
+        }
+
+        let moneyGroupDiv = container.querySelector("div.price div.input-money-group") || container.querySelector("div.input-money-group");
+
+        if (!datasetParent && moneyGroupDiv) {
+            datasetParent = moneyGroupDiv.parentElement || container;
+        }
+
+        if (!datasetParent) {
+            return null;
+        }
+
+        if (datasetParent.querySelector(":scope > span.torn-bazaar-price-dataset") === null) {
+            const datasetSpan = document.createElement('span');
+            datasetSpan.className = 'torn-bazaar-price-dataset';
+            datasetParent.appendChild(datasetSpan);
+        }
+
+        return datasetParent.querySelector(":scope > span.torn-bazaar-price-dataset");
+    }
+
+    function formatPriceDataset(result) {
+        if (!result || !result.filteredPrices) {
+            return '';
+        }
+
+        let prices = result.filteredPrices.slice(0, 8).map(formatDatasetListing).join(', ');
+        let suffix = result.filteredPrices.length > 8 ? ` +${result.filteredPrices.length - 8}` : '';
+        let minPrice = Math.min(...result.filteredPrices.map(listing => listing.price));
+        let maxPrice = Math.max(...result.filteredPrices.map(listing => listing.price));
+        let range = `range ${minPrice}-${maxPrice}`;
+        let ignored = result.ignoredPrices && result.ignoredPrices.length > 0
+            ? ` | ignored ${result.ignoredPrices.map(formatDatasetListing).join(', ')}`
+            : '';
+
+        return `TornW3B rank pricing | used [${prices}${suffix}] | ${range} | ref ${Math.round(result.referencePrice)} | fill ${result.lowBallPrice}${ignored}`;
+    }
+
+    function formatDatasetListing(listing) {
+        return `${listing.price}${listing.source === 'itemmarket' ? 'm' : 'b'}`;
+    }
+
+    function updateDatasetDisplay(container, result, triggerElement) {
+        let datasetSpan = insertDatasetSpan(container, triggerElement);
+        if (!datasetSpan) return;
+
+        let datasetText = formatPriceDataset(result);
+        datasetSpan.textContent = `data ${Math.round(result.referencePrice)} -> ${result.lowBallPrice}`;
+        datasetSpan.dataset.detail = datasetText;
+        datasetSpan.title = datasetText;
+    }
+
     function fillQuantityAndPrice(element, pageType){
         let amountDiv = element.parentElement.parentElement.parentElement.parentElement.parentElement.querySelector("div.amount-main-wrap");
         let priceInputs = amountDiv.querySelectorAll("div.price div input");
@@ -308,6 +365,7 @@
             if (!result) return;
             let lowBallPrice = result.lowBallPrice;
             applyPriceComparison(result, insertPercentageSpan(amountDiv), wave);
+            updateDatasetDisplay(amountDiv, result, element);
 
             setPriceInputs(priceInputs, lowBallPrice, inputEvent);
 
@@ -363,6 +421,7 @@
             if (!result) return;
             let lowBallPrice = result.lowBallPrice;
             applyPriceComparison(result, insertPercentageManageSpan(moneyGroupDiv), wave);
+            updateDatasetDisplay(moneyGroupDiv, result, element);
 
             setPriceInputs(priceInputs, lowBallPrice, inputEvent);
         })
@@ -627,34 +686,55 @@
 
     function filterCheapOutliers(listings) {
         if (listings.length < 4) {
-            return listings;
+            return { listings, ignoredListings: [] };
         }
 
-        let clusterIndex = Math.min(3, listings.length - 1);
-        let clusterPrice = listings[clusterIndex].price;
-        if (!Number.isFinite(clusterPrice) || clusterPrice <= 0) {
-            return listings;
+        let prices = listings.map(listing => listing.price).sort((a, b) => a - b);
+        let clusterIndex = Math.min(3, prices.length - 1);
+        let clusterPrice = prices[clusterIndex];
+        let q1 = median(prices.slice(0, Math.floor(prices.length / 2)));
+        let q3 = median(prices.slice(Math.ceil(prices.length / 2)));
+        let iqr = q3 - q1;
+
+        if (!Number.isFinite(clusterPrice) || clusterPrice <= 0 || !Number.isFinite(iqr)) {
+            return { listings, ignoredListings: [] };
         }
 
-        let minimumReasonablePrice = clusterPrice * 0.70;
-        let filteredListings = listings.filter(listing => listing.price >= minimumReasonablePrice);
+        let minimumReasonablePrice = Math.max(clusterPrice * 0.70, q1 - (iqr * 1.25));
+        let filteredListings = listings.filter(listing => listing.price >= minimumReasonablePrice || listing.quantity > 2);
+        let ignoredListings = listings.filter(listing => listing.price < minimumReasonablePrice && listing.quantity <= 2);
 
         if (filteredListings.length !== listings.length && filteredListings.length > 0) {
             console.warn(
                 `[TornBazaarFiller] Ignored ${listings.length - filteredListings.length} cheap outlier listing(s). ` +
                 `Reference price: ${clusterPrice}, minimum accepted: ${Math.round(minimumReasonablePrice)}.`
             );
-            return filteredListings;
+            return { listings: filteredListings, ignoredListings };
         }
 
-        return listings;
+        return { listings, ignoredListings: [] };
     }
 
-    function selectClusterAwareListing(listings, slotOffset) {
-        if (slotOffset > 0 || listings.length < 3) {
-            return listings[Math.min(slotOffset, listings.length - 1)];
+    function median(numbers) {
+        if (!numbers || numbers.length === 0) {
+            return Number.NaN;
         }
 
+        let sorted = numbers.slice().sort((a, b) => a - b);
+        let middle = Math.floor(sorted.length / 2);
+        return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+    }
+
+    function upperMedian(numbers) {
+        if (!numbers || numbers.length === 0) {
+            return Number.NaN;
+        }
+
+        let sorted = numbers.slice().sort((a, b) => a - b);
+        return sorted[Math.floor(sorted.length / 2)];
+    }
+
+    function findDominantCluster(listings) {
         let clusters = [];
         for (let listing of listings) {
             let cluster = clusters.find(existing => existing.price === listing.price);
@@ -672,22 +752,32 @@
             });
         }
 
-        let dominantCluster = clusters
+        return clusters
             .filter(cluster => cluster.count >= 2)
             .sort((a, b) => b.count - a.count || a.price - b.price)[0];
+    }
 
-        if (!dominantCluster) {
-            return listings[0];
+    function selectTornW3BReferenceListing(listings, slotOffset) {
+        if (slotOffset > 0 || listings.length < 2) {
+            return listings[Math.min(slotOffset, listings.length - 1)];
         }
 
-        let lowerListings = listings.filter(listing => listing.price < dominantCluster.price);
-        let lowerListingsAreClose = lowerListings.length === 0 || lowerListings.every(listing => listing.price >= dominantCluster.price * 0.85);
-        if (lowerListings.length > 0 && lowerListings.length <= 2 && lowerListingsAreClose) {
-            console.warn(
-                `[TornBazaarFiller] Pricing against repeated cluster ${dominantCluster.price} ` +
-                `instead of ${lowerListings.length} lower listing(s).`
-            );
-            return dominantCluster.listing;
+        let cumulativeQuantity = listings[0].quantity || 1;
+        for (let i = 1; i < Math.min(listings.length, 8); i++) {
+            let previousPrice = listings[i - 1].price;
+            let currentPrice = listings[i].price;
+            let priceGap = currentPrice - previousPrice;
+            let gapPercent = priceGap / previousPrice;
+
+            if (priceGap >= 100 && gapPercent >= 0.03 && cumulativeQuantity <= 250) {
+                console.warn(
+                    `[TornBazaarFiller] Pricing into price gap: ${previousPrice} -> ${currentPrice}, ` +
+                    `stock before gap: ${cumulativeQuantity}.`
+                );
+                return listings[i];
+            }
+
+            cumulativeQuantity += listings[i].quantity || 1;
         }
 
         return listings[0];
@@ -718,20 +808,28 @@
 
         return getListingsForPricing(itemId, formula.source).then(listings => {
             listings.sort((a, b) => a.price - b.price);
-            listings = filterCheapOutliers(listings);
+            let rawListings = listings.slice();
+            let bazaarListings = listings.filter(listing => listing.source === 'bazaar');
+            let pricingListings = bazaarListings.length > 0 ? bazaarListings : listings;
+            let filteredResult = filterCheapOutliers(pricingListings);
+            pricingListings = filteredResult.listings;
 
-            if (listings.length === 0) {
+            if (pricingListings.length === 0) {
                 throw new Error("[TornBazaarFiller] No usable listings found");
             }
 
-            let selectedListing = selectClusterAwareListing(listings, formula.slotOffset);
-            let comparisonListing = listings[Math.min(2, listings.length - 1)];
+            let referenceListing = selectTornW3BReferenceListing(pricingListings, formula.slotOffset);
+            let comparisonListing = pricingListings[Math.min(2, pricingListings.length - 1)];
 
             return {
-                lowBallPrice: calculateFinalPrice(selectedListing.price, formula.operation),
+                lowBallPrice: calculateFinalPrice(referenceListing.price, formula.operation),
                 comparisonPrice: comparisonListing.price,
                 source: formula.source,
-                selectedListing
+                referencePrice: referenceListing.price,
+                referenceListing,
+                rawPrices: rawListings,
+                filteredPrices: pricingListings,
+                ignoredPrices: filteredResult.ignoredListings
             };
         });
     }
@@ -809,7 +907,7 @@
     }
 
     function setPriceDelta() {
-        let userInput = prompt('Enter price delta formula. Examples: -1, -5, -1[2], -1[combined:2], -1[bazaar:2], -1[itemmarket:2], -1[market]. Default source is combined item market + bazaar, with cheap-listing and repeated-price cluster protection:', priceDeltaRaw);
+        let userInput = prompt('Enter price delta formula. Examples: -1, -5, -1[2], -1[bazaar:2], -1[itemmarket:2], -1[market]. Default source uses TornW3B bazaar rank pricing: target rank #1 after ignoring tiny cheap dumps, then apply delta:', priceDeltaRaw);
         if (userInput !== null) {
             priceDeltaRaw = userInput;
             localStorage.setItem("silmaril-torn-bazaar-filler-price-delta", userInput);
