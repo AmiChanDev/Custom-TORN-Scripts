@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn $1 Bazaar Highlighter @AmrisG
 // @namespace    torn-dollar-bazaar-highlighter @AmrisG
-// @version      1.2.0
+// @version      1.2.1
 // @description  Highlights visible $1 bazaar item cards and colors buyable ones differently.
 // @author       AmrisG
 // @match        https://www.torn.com/bazaar.php*
@@ -183,6 +183,8 @@
   }
 
   function isBuyableItem(item) {
+    if (hasLockedVisual(item)) return false;
+
     return Array.from(
       item.querySelectorAll('button, input[type="button"], input[type="submit"], a'),
     ).some(
@@ -195,11 +197,18 @@
   }
 
   function isActionControl(control) {
-    const tag = control.tagName.toLowerCase();
-    if (tag === "button" || tag === "input") return true;
-
     const text = controlLabel(control);
-    return /\b(buy|cart|purchase)\b/i.test(text);
+    const hint = normalizeText(
+      [
+        control.className,
+        control.id,
+        control.getAttribute("data-action"),
+        control.getAttribute("data-testid"),
+        control.innerHTML,
+      ].join(" "),
+    );
+
+    return /\b(buy|cart|purchase|basket|shopping)\b/i.test(`${text} ${hint}`);
   }
 
   function isDisabled(control) {
@@ -214,6 +223,14 @@
   function isViewOnlyControl(control) {
     const text = controlLabel(control);
     return /\b(view|preview|inspect|details)\b/i.test(text);
+  }
+
+  function hasLockedVisual(item) {
+    return (
+      item.querySelector(
+        '[class*="lock" i], [aria-label*="lock" i], [title*="lock" i], img[src*="lock" i], svg[class*="lock" i]',
+      ) !== null
+    );
   }
 
   function controlLabel(control) {
