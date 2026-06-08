@@ -23,8 +23,10 @@
   const GOOGLE_DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
   const GOOGLE_DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
   const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-  const GOOGLE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+  const GOOGLE_SCOPE = "https://www.googleapis.com/auth/drive.file";
   const GOOGLE_BACKUP_NAME = "torn-le-tracker-backup.json";
+  const GOOGLE_BACKUP_FOLDER_PATH = ["TORN", "TORN LE Log"];
+  const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
   const DEFAULT_RATE = 350000;
   const DEFAULT_ESCAPE_RATE = 600000;
   const DEFAULT_LOOKBACK_DAYS = 30;
@@ -546,6 +548,7 @@
       state.googleClientId = googleClientInput.value.trim();
       state.googleAccessToken = "";
       state.googleTokenExpiresAt = 0;
+      state.googleTokenScope = "";
       saveState();
       updateGoogleStatus();
       setStatus(state.googleClientId ? "Google Client ID saved." : "Google Client ID cleared.");
@@ -790,10 +793,18 @@
       setStatus("Connecting to Google...");
       const token = await ensureGoogleToken();
       saveState();
+      setStatus("Opening Google Drive folder...");
+      const folderId = await ensureGoogleBackupFolder(token);
       setStatus("Uploading backup to Google Drive...");
-      const file = await findGoogleBackup(token);
-      const uploaded = await uploadGoogleBackup(token, file && file.id, backupPayload());
+      const file = await findGoogleBackup(token, folderId);
+      const uploaded = await uploadGoogleBackup(
+        token,
+        folderId,
+        file && file.id,
+        backupPayload(),
+      );
       state.googleBackupFileId = uploaded.id || (file && file.id) || "";
+      state.googleBackupFolderId = folderId;
       state.googleLastBackupAt = new Date().toISOString();
       saveState();
       updateGoogleStatus();
@@ -808,16 +819,23 @@
     try {
       setStatus("Connecting to Google...");
       const token = await ensureGoogleToken();
+      setStatus("Looking for Google Drive folder...");
+      const folderId = await findGoogleBackupFolder(token);
+      if (!folderId) {
+        setStatus("No Google Drive folder found at TORN/TORN Loss Log.");
+        return;
+      }
       setStatus("Looking for Google Drive backup...");
-      const file = await findGoogleBackup(token);
+      const file = await findGoogleBackup(token, folderId);
       if (!file || !file.id) {
-        setStatus("No Google Drive backup found.");
+        setStatus("No Google Drive backup found in TORN/TORN Loss Log.");
         return;
       }
       setStatus("Downloading Google Drive backup...");
       const parsed = await downloadGoogleBackup(token, file.id);
       applyImportedState(parsed);
       state.googleBackupFileId = file.id;
+      state.googleBackupFolderId = folderId;
       state.googleLastRestoreAt = new Date().toISOString();
       saveState();
       updateGoogleStatus();
@@ -872,6 +890,7 @@
     const copy = { ...state };
     delete copy.googleAccessToken;
     delete copy.googleTokenExpiresAt;
+    delete copy.googleTokenScope;
     return copy;
   }
 
@@ -881,7 +900,9 @@
       googleClientId: state.googleClientId || "",
       googleAccessToken: state.googleAccessToken || "",
       googleTokenExpiresAt: state.googleTokenExpiresAt || 0,
+      googleTokenScope: state.googleTokenScope || "",
       googleBackupFileId: state.googleBackupFileId || "",
+      googleBackupFolderId: state.googleBackupFolderId || "",
       ...(importedState || {}),
     });
     Object.keys(state).forEach((key) => delete state[key]);
@@ -903,6 +924,7 @@
   function hasValidGoogleToken() {
     return Boolean(
       state.googleAccessToken &&
+        state.googleTokenScope === GOOGLE_SCOPE &&
         Number(state.googleTokenExpiresAt) > Date.now() + 60000,
     );
   }
@@ -966,6 +988,7 @@
           const expiresIn = Math.max(60, Number(hash.get("expires_in")) || 3600);
           state.googleAccessToken = token;
           state.googleTokenExpiresAt = Date.now() + expiresIn * 1000;
+          state.googleTokenScope = GOOGLE_SCOPE;
           saveState();
           updateGoogleStatus();
           window.clearInterval(timer);
@@ -980,20 +1003,75 @@
     return `${location.origin}/`;
   }
 
-  async function findGoogleBackup(token) {
-    const query = `name = '${GOOGLE_BACKUP_NAME.replace(/'/g, "\\'")}' and trashed = false`;
-    const url =
-      GOOGLE_DRIVE_FILES +
-      "?spaces=appDataFolder&fields=files(id,name,modifiedTime,size)&q=" +
-      encodeURIComponent(query);
-    const data = await requestGoogleJson(token, "GET", url);
+  async function findGoogleBackupFolder(token) {
+    let parentId = "root";
+    for (const name of GOOGLE_BACKUP_FOLDER_PATH) {
+      const folder = await findGoogleFolder(token, name, parentId);
+      if (!folder || !folder.id) return "";
+      parentId = folder.id;
+    }
+    return parentId;
+  }
+
+  async function ensureGoogleBackupFolder(token) {
+    let parentId = "root";
+    for (const name of GOOGLE_BACKUP_FOLDER_PATH) {
+      let folder = await findGoogleFolder(token, name, parentId);
+      if (!folder || !folder.id) {
+        folder = await createGoogleFolder(token, name, parentId);
+      }
+      parentId = folder.id;
+    }
+    return parentId;
+  }
+
+  async function findGoogleFolder(token, name, parentId) {
+    const query = [
+      `name = '${googleQueryString(name)}'`,
+      `mimeType = '${GOOGLE_FOLDER_MIME}'`,
+      "trashed = false",
+      `'${googleQueryString(parentId)}' in parents`,
+    ].join(" and ");
+    const data = await listGoogleFiles(token, query);
     return data && Array.isArray(data.files) ? data.files[0] : null;
   }
 
-  function uploadGoogleBackup(token, fileId, payload) {
+  function createGoogleFolder(token, name, parentId) {
+    return requestGoogleJson(
+      token,
+      "POST",
+      `${GOOGLE_DRIVE_FILES}?fields=id,name`,
+      JSON.stringify({
+        name,
+        mimeType: GOOGLE_FOLDER_MIME,
+        parents: [parentId],
+      }),
+      { "Content-Type": "application/json; charset=UTF-8" },
+    );
+  }
+
+  async function findGoogleBackup(token, folderId) {
+    const query = [
+      `name = '${googleQueryString(GOOGLE_BACKUP_NAME)}'`,
+      "trashed = false",
+      `'${googleQueryString(folderId)}' in parents`,
+    ].join(" and ");
+    const data = await listGoogleFiles(token, query);
+    return data && Array.isArray(data.files) ? data.files[0] : null;
+  }
+
+  function listGoogleFiles(token, query) {
+    const url =
+      GOOGLE_DRIVE_FILES +
+      "?spaces=drive&fields=files(id,name,mimeType,modifiedTime,size)&q=" +
+      encodeURIComponent(query);
+    return requestGoogleJson(token, "GET", url);
+  }
+
+  function uploadGoogleBackup(token, folderId, fileId, payload) {
     const metadata = fileId
       ? { name: GOOGLE_BACKUP_NAME }
-      : { name: GOOGLE_BACKUP_NAME, parents: ["appDataFolder"] };
+      : { name: GOOGLE_BACKUP_NAME, parents: [folderId] };
     const boundary = "tlet-drive-boundary-" + Date.now();
     const body = [
       `--${boundary}`,
@@ -1013,6 +1091,10 @@
     return requestGoogleJson(token, fileId ? "PATCH" : "POST", url, body, {
       "Content-Type": `multipart/related; boundary=${boundary}`,
     });
+  }
+
+  function googleQueryString(value) {
+    return String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   }
 
   async function downloadGoogleBackup(token, fileId) {
@@ -2377,6 +2459,7 @@
           if (r.status === 401) {
             state.googleAccessToken = "";
             state.googleTokenExpiresAt = 0;
+            state.googleTokenScope = "";
             saveState();
             updateGoogleStatus();
           }
@@ -2408,7 +2491,9 @@
         googleClientId: "",
         googleAccessToken: "",
         googleTokenExpiresAt: 0,
+        googleTokenScope: "",
         googleBackupFileId: "",
+        googleBackupFolderId: "",
         lookbackDays: DEFAULT_LOOKBACK_DAYS,
         rowLimit: DEFAULT_ROW_LIMIT,
         ...JSON.parse(localStorage.getItem(STORE_KEY) || localStorage.getItem(LEGACY_STORE_KEY) || "{}"),
@@ -2428,7 +2513,9 @@
         googleClientId: "",
         googleAccessToken: "",
         googleTokenExpiresAt: 0,
+        googleTokenScope: "",
         googleBackupFileId: "",
+        googleBackupFolderId: "",
         lookbackDays: DEFAULT_LOOKBACK_DAYS,
         rowLimit: DEFAULT_ROW_LIMIT,
       });
@@ -2466,8 +2553,12 @@
       googleTokenExpiresAt: Number.isFinite(Number(saved.googleTokenExpiresAt))
         ? Number(saved.googleTokenExpiresAt)
         : 0,
+      googleTokenScope:
+        typeof saved.googleTokenScope === "string" ? saved.googleTokenScope : "",
       googleBackupFileId:
         typeof saved.googleBackupFileId === "string" ? saved.googleBackupFileId : "",
+      googleBackupFolderId:
+        typeof saved.googleBackupFolderId === "string" ? saved.googleBackupFolderId : "",
       googleLastBackupAt:
         typeof saved.googleLastBackupAt === "string" ? saved.googleLastBackupAt : "",
       googleLastRestoreAt:
