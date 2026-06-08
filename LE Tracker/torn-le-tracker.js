@@ -1,12 +1,14 @@
 ﻿// ==UserScript==
 // @name         Torn LE Tracker @AmrisG
 // @namespace    torn-LE-tracker @AmrisG
-// @version      3.2.0
-// @description  Compact loss/escape tracking panel with local payment tracking.
+// @version      3.3.0
+// @description  Compact loss/escape tracking panel with local and Google Drive backup.
 // @author       AmrisG
 // @match        https://www.torn.com/*
 // @match        https://torn.com/*
 // @connect      api.torn.com
+// @connect      accounts.google.com
+// @connect      www.googleapis.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // ==/UserScript==
@@ -18,6 +20,11 @@
   const LEGACY_STORE_KEY = "tlpt:v1";
   const API_BASE = "https://api.torn.com/v2";
   const API_V1_BASE = "https://api.torn.com";
+  const GOOGLE_DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
+  const GOOGLE_DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
+  const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+  const GOOGLE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+  const GOOGLE_BACKUP_NAME = "torn-le-tracker-backup.json";
   const DEFAULT_RATE = 350000;
   const DEFAULT_ESCAPE_RATE = 600000;
   const DEFAULT_LOOKBACK_DAYS = 30;
@@ -135,6 +142,7 @@
     .tlet-key-row { display: flex; gap: 6px; align-items: end; }
     .tlet-key-row .tlet-field { flex: 1; }
     .tlet-backup-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .tlet-google-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
     .tlet-source-manage-row { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 6px; }
     .tlet-source-manage-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
@@ -427,6 +435,21 @@
             <button class="tlet-btn" id="tlet-export-backup" type="button">Export JSON</button>
             <button class="tlet-btn" id="tlet-import-backup" type="button">Import JSON</button>
           </div>
+          <div class="tlet-google-row">
+            <div class="tlet-field">
+              <label>Google OAuth Client ID</label>
+              <input id="tlet-google-client" class="tlet-input" type="text" autocomplete="off" placeholder="Google web client ID" />
+            </div>
+            <button class="tlet-btn" id="tlet-save-google" type="button">Save</button>
+          </div>
+          <div id="tlet-google-status" class="tlet-key-status">
+            <span class="tlet-key-dot" id="tlet-google-dot"></span>
+            <span class="tlet-key-text" id="tlet-google-text">Google not configured</span>
+          </div>
+          <div class="tlet-backup-row">
+            <button class="tlet-btn blue" id="tlet-google-backup" type="button">Backup to Google</button>
+            <button class="tlet-btn blue" id="tlet-google-restore" type="button">Restore from Google</button>
+          </div>
           <input id="tlet-import-file" type="file" accept="application/json,.json" style="display:none" />
         </div>
       </div>
@@ -501,13 +524,16 @@
     const rateInput = document.getElementById("tlet-rate");
     const escRateInput = document.getElementById("tlet-escape-rate");
     const rowLimitInput = document.getElementById("tlet-row-limit");
+    const googleClientInput = document.getElementById("tlet-google-client");
 
     keyInput.value = state.apiKey || "";
     rateInput.value = String(state.defaultRate || DEFAULT_RATE);
     escRateInput.value = String(state.defaultEscapeRate || DEFAULT_ESCAPE_RATE);
     rowLimitInput.value = String(rowLimit());
+    googleClientInput.value = state.googleClientId || "";
 
     updateKeyStatus();
+    updateGoogleStatus();
     updateToolsPanel();
 
     document.getElementById("tlet-save-key").addEventListener("click", () => {
@@ -515,6 +541,14 @@
       saveState();
       updateKeyStatus();
       setStatus(state.apiKey ? "API key saved." : "Key cleared.");
+    });
+    document.getElementById("tlet-save-google").addEventListener("click", () => {
+      state.googleClientId = googleClientInput.value.trim();
+      state.googleAccessToken = "";
+      state.googleTokenExpiresAt = 0;
+      saveState();
+      updateGoogleStatus();
+      setStatus(state.googleClientId ? "Google Client ID saved." : "Google Client ID cleared.");
     });
     document
       .getElementById("tlet-export-backup")
@@ -525,6 +559,12 @@
     document
       .getElementById("tlet-import-file")
       .addEventListener("change", importBackup);
+    document
+      .getElementById("tlet-google-backup")
+      .addEventListener("click", backupToGoogle);
+    document
+      .getElementById("tlet-google-restore")
+      .addEventListener("click", restoreFromGoogle);
     document
       .getElementById("tlet-rename-source")
       .addEventListener("click", renameSelectedSource);
@@ -629,6 +669,22 @@
     }
   }
 
+  function updateGoogleStatus() {
+    const dot = document.getElementById("tlet-google-dot");
+    const text = document.getElementById("tlet-google-text");
+    if (!dot || !text) return;
+    const hasClient = Boolean(state.googleClientId);
+    const hasToken = hasValidGoogleToken();
+    dot.classList.toggle("set", hasClient && hasToken);
+    if (!hasClient) {
+      text.textContent = "Google not configured";
+    } else if (hasToken) {
+      text.textContent = "Google connected";
+    } else {
+      text.textContent = "Google Client ID saved";
+    }
+  }
+
   function toggleSettings() {
     settingsOpen = !settingsOpen;
     document
@@ -716,15 +772,7 @@
 
   function exportBackup() {
     saveState();
-    const payload = JSON.stringify(
-      {
-        exportedAt: new Date().toISOString(),
-        storeKey: STORE_KEY,
-        state,
-      },
-      null,
-      2,
-    );
+    const payload = backupPayload();
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -735,6 +783,48 @@
     link.remove();
     URL.revokeObjectURL(url);
     setStatus("Backup exported.");
+  }
+
+  async function backupToGoogle() {
+    try {
+      setStatus("Connecting to Google...");
+      const token = await ensureGoogleToken();
+      saveState();
+      setStatus("Uploading backup to Google Drive...");
+      const file = await findGoogleBackup(token);
+      const uploaded = await uploadGoogleBackup(token, file && file.id, backupPayload());
+      state.googleBackupFileId = uploaded.id || (file && file.id) || "";
+      state.googleLastBackupAt = new Date().toISOString();
+      saveState();
+      updateGoogleStatus();
+      setStatus("Backup saved to Google Drive.");
+    } catch (err) {
+      setStatus(`Google backup failed: ${err.message}`);
+    }
+  }
+
+  async function restoreFromGoogle() {
+    if (!window.confirm("Restore the Google backup and replace current LE Tracker data?")) return;
+    try {
+      setStatus("Connecting to Google...");
+      const token = await ensureGoogleToken();
+      setStatus("Looking for Google Drive backup...");
+      const file = await findGoogleBackup(token);
+      if (!file || !file.id) {
+        setStatus("No Google Drive backup found.");
+        return;
+      }
+      setStatus("Downloading Google Drive backup...");
+      const parsed = await downloadGoogleBackup(token, file.id);
+      applyImportedState(parsed);
+      state.googleBackupFileId = file.id;
+      state.googleLastRestoreAt = new Date().toISOString();
+      saveState();
+      updateGoogleStatus();
+      setStatus("Google backup restored. Press refresh to load the latest rows.");
+    } catch (err) {
+      setStatus(`Google restore failed: ${err.message}`);
+    }
   }
 
   function importBackup(event) {
@@ -751,21 +841,7 @@
     reader.onload = () => {
       try {
         const parsed = JSON.parse(String(reader.result || "{}"));
-        const importedState = parsed && parsed.state ? parsed.state : parsed;
-        const nextState = normalizeState(importedState || {});
-        Object.keys(state).forEach((key) => delete state[key]);
-        Object.assign(state, nextState);
-        saveState();
-        lossRows = [];
-        expandedGroups.clear();
-        includesEarlierUnpaid = false;
-        activeView = "unpaid";
-        searchTerm = "";
-        sourceFilter = "";
-        clearTimeout(searchRenderTimer);
-        syncInputsFromState();
-        updateKeyStatus();
-        render();
+        applyImportedState(parsed);
         setStatus("Backup imported. Press refresh to load the latest rows.");
       } catch (err) {
         setStatus(`Import failed: ${err.message}`);
@@ -780,11 +856,180 @@
     reader.readAsText(file);
   }
 
+  function backupPayload() {
+    return JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        storeKey: STORE_KEY,
+        state: backupState(),
+      },
+      null,
+      2,
+    );
+  }
+
+  function backupState() {
+    const copy = { ...state };
+    delete copy.googleAccessToken;
+    delete copy.googleTokenExpiresAt;
+    return copy;
+  }
+
+  function applyImportedState(parsed) {
+    const importedState = parsed && parsed.state ? parsed.state : parsed;
+    const nextState = normalizeState({
+      googleClientId: state.googleClientId || "",
+      googleAccessToken: state.googleAccessToken || "",
+      googleTokenExpiresAt: state.googleTokenExpiresAt || 0,
+      googleBackupFileId: state.googleBackupFileId || "",
+      ...(importedState || {}),
+    });
+    Object.keys(state).forEach((key) => delete state[key]);
+    Object.assign(state, nextState);
+    saveState();
+    lossRows = [];
+    expandedGroups.clear();
+    includesEarlierUnpaid = false;
+    activeView = "unpaid";
+    searchTerm = "";
+    sourceFilter = "";
+    clearTimeout(searchRenderTimer);
+    syncInputsFromState();
+    updateKeyStatus();
+    updateGoogleStatus();
+    render();
+  }
+
+  function hasValidGoogleToken() {
+    return Boolean(
+      state.googleAccessToken &&
+        Number(state.googleTokenExpiresAt) > Date.now() + 60000,
+    );
+  }
+
+  async function ensureGoogleToken() {
+    if (hasValidGoogleToken()) return state.googleAccessToken;
+    if (!state.googleClientId) {
+      throw new Error("save a Google OAuth Client ID first");
+    }
+    return requestGoogleToken();
+  }
+
+  function requestGoogleToken() {
+    return new Promise((resolve, reject) => {
+      const redirectUri = googleRedirectUri();
+      const params = new URLSearchParams({
+        client_id: state.googleClientId,
+        redirect_uri: redirectUri,
+        response_type: "token",
+        scope: GOOGLE_SCOPE,
+        prompt: "consent",
+        include_granted_scopes: "true",
+      });
+      const popup = window.open(
+        `${GOOGLE_AUTH_URL}?${params.toString()}`,
+        "tlet-google-auth",
+        "width=520,height=640",
+      );
+      if (!popup) {
+        reject(new Error("Google sign-in popup was blocked"));
+        return;
+      }
+
+      const startedAt = Date.now();
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(timer);
+          reject(new Error("Google sign-in was cancelled"));
+          return;
+        }
+        if (Date.now() - startedAt > 120000) {
+          window.clearInterval(timer);
+          popup.close();
+          reject(new Error("Google sign-in timed out"));
+          return;
+        }
+        try {
+          if (!popup.location.href.startsWith(redirectUri)) return;
+          const hash = new URLSearchParams(
+            String(popup.location.hash || "").replace(/^#/, ""),
+          );
+          const error = hash.get("error");
+          if (error) {
+            window.clearInterval(timer);
+            popup.close();
+            reject(new Error(error));
+            return;
+          }
+          const token = hash.get("access_token");
+          if (!token) return;
+          const expiresIn = Math.max(60, Number(hash.get("expires_in")) || 3600);
+          state.googleAccessToken = token;
+          state.googleTokenExpiresAt = Date.now() + expiresIn * 1000;
+          saveState();
+          updateGoogleStatus();
+          window.clearInterval(timer);
+          popup.close();
+          resolve(token);
+        } catch (_) {}
+      }, 400);
+    });
+  }
+
+  function googleRedirectUri() {
+    return `${location.origin}/`;
+  }
+
+  async function findGoogleBackup(token) {
+    const query = `name = '${GOOGLE_BACKUP_NAME.replace(/'/g, "\\'")}' and trashed = false`;
+    const url =
+      GOOGLE_DRIVE_FILES +
+      "?spaces=appDataFolder&fields=files(id,name,modifiedTime,size)&q=" +
+      encodeURIComponent(query);
+    const data = await requestGoogleJson(token, "GET", url);
+    return data && Array.isArray(data.files) ? data.files[0] : null;
+  }
+
+  function uploadGoogleBackup(token, fileId, payload) {
+    const metadata = fileId
+      ? { name: GOOGLE_BACKUP_NAME }
+      : { name: GOOGLE_BACKUP_NAME, parents: ["appDataFolder"] };
+    const boundary = "tlet-drive-boundary-" + Date.now();
+    const body = [
+      `--${boundary}`,
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      JSON.stringify(metadata),
+      `--${boundary}`,
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      payload,
+      `--${boundary}--`,
+      "",
+    ].join("\r\n");
+    const url = fileId
+      ? `${GOOGLE_DRIVE_UPLOAD}/${encodeURIComponent(fileId)}?uploadType=multipart&fields=id,name,modifiedTime`
+      : `${GOOGLE_DRIVE_UPLOAD}?uploadType=multipart&fields=id,name,modifiedTime`;
+    return requestGoogleJson(token, fileId ? "PATCH" : "POST", url, body, {
+      "Content-Type": `multipart/related; boundary=${boundary}`,
+    });
+  }
+
+  async function downloadGoogleBackup(token, fileId) {
+    const text = await requestGoogleText(
+      token,
+      "GET",
+      `${GOOGLE_DRIVE_FILES}/${encodeURIComponent(fileId)}?alt=media`,
+    );
+    return JSON.parse(text || "{}");
+  }
+
   function syncInputsFromState() {
     const keyInput = document.getElementById("tlet-key");
     const rateInput = document.getElementById("tlet-rate");
     const escRateInput = document.getElementById("tlet-escape-rate");
     const rowLimitInput = document.getElementById("tlet-row-limit");
+    const googleClientInput = document.getElementById("tlet-google-client");
     const searchInput = document.getElementById("tlet-search");
     const sourceFilterInput = document.getElementById("tlet-source-filter");
     if (keyInput) keyInput.value = state.apiKey || "";
@@ -794,6 +1039,7 @@
         state.defaultEscapeRate || DEFAULT_ESCAPE_RATE,
       );
     if (rowLimitInput) rowLimitInput.value = String(rowLimit());
+    if (googleClientInput) googleClientInput.value = state.googleClientId || "";
     if (searchInput) searchInput.value = searchTerm;
     if (sourceFilterInput) sourceFilterInput.value = sourceFilter;
   }
@@ -2106,6 +2352,46 @@
     });
   }
 
+  function requestGoogleJson(token, method, url, data, headers) {
+    return requestGoogleText(token, method, url, data, headers).then((text) => {
+      try {
+        return JSON.parse(text || "{}");
+      } catch (_) {
+        throw new Error("Google returned invalid JSON");
+      }
+    });
+  }
+
+  function requestGoogleText(token, method, url, data, headers) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method,
+        url,
+        data,
+        timeout: 30000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(headers || {}),
+        },
+        onload: (r) => {
+          if (r.status === 401) {
+            state.googleAccessToken = "";
+            state.googleTokenExpiresAt = 0;
+            saveState();
+            updateGoogleStatus();
+          }
+          if (r.status && (r.status < 200 || r.status >= 300)) {
+            reject(new Error(`Google HTTP ${r.status}`));
+            return;
+          }
+          resolve(String(r.responseText || ""));
+        },
+        onerror: () => reject(new Error("Google network failed")),
+        ontimeout: () => reject(new Error("Google request timed out")),
+      });
+    });
+  }
+
   function loadState() {
     try {
       return normalizeState({
@@ -2119,6 +2405,10 @@
         billableRows: {},
         sourceCodes: [],
         removedRows: {},
+        googleClientId: "",
+        googleAccessToken: "",
+        googleTokenExpiresAt: 0,
+        googleBackupFileId: "",
         lookbackDays: DEFAULT_LOOKBACK_DAYS,
         rowLimit: DEFAULT_ROW_LIMIT,
         ...JSON.parse(localStorage.getItem(STORE_KEY) || localStorage.getItem(LEGACY_STORE_KEY) || "{}"),
@@ -2135,6 +2425,10 @@
         billableRows: {},
         sourceCodes: [],
         removedRows: {},
+        googleClientId: "",
+        googleAccessToken: "",
+        googleTokenExpiresAt: 0,
+        googleBackupFileId: "",
         lookbackDays: DEFAULT_LOOKBACK_DAYS,
         rowLimit: DEFAULT_ROW_LIMIT,
       });
@@ -2165,6 +2459,19 @@
       sourceCodes: Array.isArray(saved.sourceCodes)
         ? saved.sourceCodes.map(normalizeSourceCode).filter(Boolean)
         : [],
+      googleClientId:
+        typeof saved.googleClientId === "string" ? saved.googleClientId : "",
+      googleAccessToken:
+        typeof saved.googleAccessToken === "string" ? saved.googleAccessToken : "",
+      googleTokenExpiresAt: Number.isFinite(Number(saved.googleTokenExpiresAt))
+        ? Number(saved.googleTokenExpiresAt)
+        : 0,
+      googleBackupFileId:
+        typeof saved.googleBackupFileId === "string" ? saved.googleBackupFileId : "",
+      googleLastBackupAt:
+        typeof saved.googleLastBackupAt === "string" ? saved.googleLastBackupAt : "",
+      googleLastRestoreAt:
+        typeof saved.googleLastRestoreAt === "string" ? saved.googleLastRestoreAt : "",
       toggleTop: Number.isFinite(Number(saved.toggleTop))
         ? Number(saved.toggleTop)
         : null,
