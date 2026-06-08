@@ -37,8 +37,11 @@
       background: #151513; color: #e7d28f; box-shadow: 2px 0 14px rgba(0,0,0,.5);
       cursor: pointer; font: 800 9px/1 Arial, sans-serif; letter-spacing: .7px;
       writing-mode: vertical-rl; text-orientation: mixed;
+      touch-action: none; user-select: none;
+      transition: left .2s ease, background .12s, color .12s;
     }
     #tpmw-toggle:hover { background: #24241f; color: #ffe59b; }
+    #tpmw-toggle.tpmw-attached { left: min(380px, calc(100vw - 32px)); z-index: 1000000; }
     #tpmw-panel {
       position: fixed; left: 0; top: 0; bottom: 0; z-index: 999999;
       width: min(380px, calc(100vw - 32px)); display: flex; flex-direction: column;
@@ -117,6 +120,7 @@
     }
     @media (max-width: 520px) {
       #tpmw-panel { width: calc(100vw - 28px); }
+      #tpmw-toggle.tpmw-attached { left: calc(100vw - 28px); }
       .tpmw-grid, .tpmw-actions, .tpmw-stats { grid-template-columns: 1fr; }
       .tpmw-stat { border-right: 0; }
     }
@@ -133,7 +137,14 @@
     toggle.type = "button";
     toggle.textContent = "POINTS";
     toggle.title = "Open point market watcher";
-    toggle.addEventListener("click", () => setOpen(!isOpen));
+    makeToggleMovable(toggle);
+    toggle.addEventListener("click", () => {
+      if (toggle.dataset.dragged === "true") {
+        toggle.dataset.dragged = "";
+        return;
+      }
+      setOpen(!isOpen);
+    });
 
     const panel = document.createElement("section");
     panel.id = "tpmw-panel";
@@ -254,6 +265,59 @@
   function setOpen(nextOpen) {
     isOpen = nextOpen;
     document.getElementById("tpmw-panel").classList.toggle("tpmw-open", isOpen);
+    document.getElementById("tpmw-toggle").classList.toggle("tpmw-attached", isOpen);
+  }
+
+  function makeToggleMovable(toggle) {
+    applyToggleTop(toggle);
+
+    let drag = null;
+    toggle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = toggle.getBoundingClientRect();
+      drag = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startTop: rect.top,
+        moved: false,
+      };
+      toggle.setPointerCapture(event.pointerId);
+    });
+
+    toggle.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const deltaY = event.clientY - drag.startY;
+      if (Math.abs(deltaY) > 3) drag.moved = true;
+      if (!drag.moved) return;
+      state.toggleTop = clampToggleTop(drag.startTop + deltaY, toggle);
+      toggle.style.top = `${state.toggleTop}px`;
+      event.preventDefault();
+    });
+
+    toggle.addEventListener("pointerup", finishToggleDrag);
+    toggle.addEventListener("pointercancel", finishToggleDrag);
+    window.addEventListener("resize", () => applyToggleTop(toggle));
+
+    function finishToggleDrag(event) {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (drag.moved) {
+        toggle.dataset.dragged = "true";
+        saveState();
+      }
+      drag = null;
+    }
+  }
+
+  function applyToggleTop(toggle) {
+    if (!Number.isFinite(state.toggleTop)) return;
+    state.toggleTop = clampToggleTop(state.toggleTop, toggle);
+    toggle.style.top = `${state.toggleTop}px`;
+  }
+
+  function clampToggleTop(value, toggle) {
+    const height = toggle.getBoundingClientRect().height || 74;
+    const margin = 8;
+    return Math.round(Math.min(window.innerHeight - height - margin, Math.max(margin, Number(value) || margin)));
   }
 
   function syncInputs() {
@@ -581,6 +645,9 @@
         saved.seenDeals && typeof saved.seenDeals === "object"
           ? saved.seenDeals
           : {},
+      toggleTop: Number.isFinite(Number(saved.toggleTop))
+        ? Number(saved.toggleTop)
+        : null,
     };
   }
 

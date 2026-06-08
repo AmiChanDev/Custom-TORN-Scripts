@@ -47,12 +47,13 @@
 
     /* -- Toggle Tab -- */
     #tlet-toggle {
-      position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+      position: fixed; right: 0; top: calc(50% - 32px);
       z-index: 999998; width: 22px; height: 64px; border: 0;
       border-radius: 6px 0 0 6px; background: #1a1a18; color: #c8c5b8;
       box-shadow: -2px 0 12px rgba(0,0,0,.5); cursor: pointer;
       font: 700 8px/1 'Sora', sans-serif; letter-spacing: .5px;
       writing-mode: vertical-rl; text-orientation: mixed;
+      touch-action: none; user-select: none;
       transition: right .22s cubic-bezier(.2,.8,.2,1), background .15s, color .15s;
     }
     #tlet-toggle:hover { background: #252522; color: #f0efe8; }
@@ -374,7 +375,14 @@
     toggle.type = "button";
     toggle.textContent = "PAY";
     toggle.title = "Open LE tracker";
-    toggle.addEventListener("click", togglePanel);
+    makeToggleMovable(toggle);
+    toggle.addEventListener("click", () => {
+      if (toggle.dataset.dragged === "true") {
+        toggle.dataset.dragged = "";
+        return;
+      }
+      togglePanel();
+    });
 
     const panel = document.createElement("section");
     panel.id = "tlet-panel";
@@ -652,6 +660,58 @@
       .getElementById("tlet-toggle")
       .classList.toggle("tlet-attached", isOpen);
     if (isOpen && state.apiKey && lossRows.length === 0) refreshLosses();
+  }
+
+  function makeToggleMovable(toggle) {
+    applyToggleTop(toggle);
+
+    let drag = null;
+    toggle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = toggle.getBoundingClientRect();
+      drag = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startTop: rect.top,
+        moved: false,
+      };
+      toggle.setPointerCapture(event.pointerId);
+    });
+
+    toggle.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const deltaY = event.clientY - drag.startY;
+      if (Math.abs(deltaY) > 3) drag.moved = true;
+      if (!drag.moved) return;
+      state.toggleTop = clampToggleTop(drag.startTop + deltaY, toggle);
+      toggle.style.top = `${state.toggleTop}px`;
+      event.preventDefault();
+    });
+
+    toggle.addEventListener("pointerup", finishToggleDrag);
+    toggle.addEventListener("pointercancel", finishToggleDrag);
+    window.addEventListener("resize", () => applyToggleTop(toggle));
+
+    function finishToggleDrag(event) {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (drag.moved) {
+        toggle.dataset.dragged = "true";
+        saveState();
+      }
+      drag = null;
+    }
+  }
+
+  function applyToggleTop(toggle) {
+    if (!Number.isFinite(state.toggleTop)) return;
+    state.toggleTop = clampToggleTop(state.toggleTop, toggle);
+    toggle.style.top = `${state.toggleTop}px`;
+  }
+
+  function clampToggleTop(value, toggle) {
+    const height = toggle.getBoundingClientRect().height || 64;
+    const margin = 8;
+    return Math.round(Math.min(window.innerHeight - height - margin, Math.max(margin, Number(value) || margin)));
   }
 
   function exportBackup() {
@@ -2105,6 +2165,9 @@
       sourceCodes: Array.isArray(saved.sourceCodes)
         ? saved.sourceCodes.map(normalizeSourceCode).filter(Boolean)
         : [],
+      toggleTop: Number.isFinite(Number(saved.toggleTop))
+        ? Number(saved.toggleTop)
+        : null,
     };
   }
 
