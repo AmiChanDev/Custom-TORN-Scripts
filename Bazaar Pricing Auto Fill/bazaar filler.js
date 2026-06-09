@@ -24,6 +24,12 @@
   const itemUrl =
     "https://api.torn.com/torn/{itemId}?selections=items&key={apiKey}&comment=BazaarFiller";
   const weav3rMarketplaceUrl = "https://weav3r.dev/api/marketplace/{itemId}";
+  const minimumMarketValueRatio = 0.99;
+  const maximumMarketValueRatio = 1;
+  const pricingListingLimit = 8;
+  const updateAllConcurrency = 3;
+  const updateAllBatchDelayMs = 25;
+  const updateAllScrollDelayMs = 250;
   let priceDeltaRaw =
     localStorage.getItem("silmaril-torn-bazaar-filler-price-delta") ?? "-1";
   let apiKey = localStorage.getItem("silmaril-torn-bazaar-filler-apikey");
@@ -34,7 +40,7 @@
       checkApiKey(false);
     });
   } catch (error) {
-    console.log("[TornBazaarFiller] Tampermonkey not detected!");
+    console.warn("[TornBazaarFiller] Tampermonkey not detected!");
   }
 
   // TornPDA support for GM_addStyle
@@ -163,7 +169,10 @@
     switch (pageType) {
       case pages.AddItems:
         $(outerSpanFill).on("click", "input", function (event) {
-          checkApiKey();
+          if (!checkApiKey()) {
+            event.stopPropagation();
+            return;
+          }
           this.parentNode.style.display = "none";
           fillQuantityAndPrice(this, pageType);
           event.stopPropagation();
@@ -177,7 +186,10 @@
         break;
       case pages.ManageItems:
         $(outerSpanFill).on("click", "input", function (event) {
-          checkApiKey();
+          if (!checkApiKey()) {
+            event.stopPropagation();
+            return;
+          }
           updatePrice(this);
           event.stopPropagation();
         });
@@ -210,7 +222,10 @@
     target.appendChild(outerSpan);
 
     $(outerSpan).on("click", "input", function (event) {
-      checkApiKey();
+      if (!checkApiKey()) {
+        event.stopPropagation();
+        return;
+      }
       updateAllPrices(this);
       event.stopPropagation();
     });
@@ -254,6 +269,101 @@
     ).filter((button) => button.isConnected && button.offsetParent !== null);
   }
 
+  function getUpdateButtonKey(updateButton) {
+    if (updateButton.dataset.tornBazaarUpdateAllKey) {
+      return updateButton.dataset.tornBazaarUpdateAllKey;
+    }
+
+    let row = updateButton.closest(
+      'div[class*="row___"], div[data-testid="sortable-item"], li.clearfix',
+    );
+    if (row && row.dataset.tornBazaarUpdateAllKey) {
+      updateButton.dataset.tornBazaarUpdateAllKey =
+        row.dataset.tornBazaarUpdateAllKey;
+      return row.dataset.tornBazaarUpdateAllKey;
+    }
+
+    let image = row && row.querySelector("div[class*=imgContainer___] img");
+    let itemId = getItemIdFromImage(image);
+    let rowText = row ? row.textContent.replace(/\s+/g, " ").trim() : "";
+
+    return `${itemId}:${rowText}`;
+  }
+
+  function setUpdateButtonKey(updateButton, key) {
+    updateButton.dataset.tornBazaarUpdateAllKey = key;
+    let row = updateButton.closest(
+      'div[class*="row___"], div[data-testid="sortable-item"], li.clearfix',
+    );
+    if (row) {
+      row.dataset.tornBazaarUpdateAllKey = key;
+    }
+  }
+
+  function findManageScrollContainer(firstUpdateButton) {
+    let row = firstUpdateButton.closest(
+      'div[class*="row___"], div[data-testid="sortable-item"], li.clearfix',
+    );
+    let element = row ? row.parentElement : null;
+
+    while (element && element !== document.body) {
+      if (element.scrollHeight > element.clientHeight + 20) {
+        return element;
+      }
+      element = element.parentElement;
+    }
+
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function getScrollTop(scrollContainer) {
+    return scrollContainer === document.body ||
+      scrollContainer === document.documentElement
+      ? window.scrollY
+      : scrollContainer.scrollTop;
+  }
+
+  function getMaxScrollTop(scrollContainer) {
+    if (
+      scrollContainer === document.body ||
+      scrollContainer === document.documentElement
+    ) {
+      return Math.max(
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight,
+      ) - window.innerHeight;
+    }
+
+    return scrollContainer.scrollHeight - scrollContainer.clientHeight;
+  }
+
+  function scrollManageContainer(scrollContainer) {
+    if (
+      scrollContainer === document.body ||
+      scrollContainer === document.documentElement
+    ) {
+      window.scrollBy(0, Math.max(window.innerHeight * 0.75, 300));
+      return;
+    }
+
+    scrollContainer.scrollTop += Math.max(
+      scrollContainer.clientHeight * 0.75,
+      300,
+    );
+  }
+
+  function setScrollTop(scrollContainer, scrollTop) {
+    if (
+      scrollContainer === document.body ||
+      scrollContainer === document.documentElement
+    ) {
+      window.scrollTo(0, scrollTop);
+      return;
+    }
+
+    scrollContainer.scrollTop = scrollTop;
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -262,24 +372,81 @@
     if (button.dataset.running === "true") return;
 
     let updateButtons = getManageUpdateButtons();
-    if (updateButtons.length === 0) return;
+    if (updateButtons.length === 0) {
+      button.value = "No visible items";
+      await sleep(800);
+      button.value = "Update all prices";
+      return;
+    }
 
     button.dataset.running = "true";
     button.disabled = true;
 
     try {
-      for (let i = 0; i < updateButtons.length; i++) {
-        let updateButton = updateButtons[i];
-        if (!updateButton.isConnected || updateButton.offsetParent === null)
-          continue;
+      let completed = 0;
+      let seenRows = new Set();
+      let idleScrolls = 0;
+      let scrollContainer = findManageScrollContainer(updateButtons[0]);
+      let initialScrollTop = getScrollTop(scrollContainer);
 
-        button.value = `Updating ${i + 1}/${updateButtons.length}`;
-        await Promise.resolve(updatePrice(updateButton)).catch((error) =>
-          console.error("[TornBazaarFiller] Failed to update row:", error),
+      while (idleScrolls < 2) {
+        let visibleKeyCounts = {};
+        let visibleButtons = getManageUpdateButtons().filter(
+          (updateButton) => {
+            let baseKey = getUpdateButtonKey(updateButton);
+            visibleKeyCounts[baseKey] = (visibleKeyCounts[baseKey] || 0) + 1;
+            let key = updateButton.dataset.tornBazaarUpdateAllKey
+              ? baseKey
+              : `${baseKey}#${visibleKeyCounts[baseKey]}`;
+            setUpdateButtonKey(updateButton, key);
+            if (seenRows.has(key)) {
+              return false;
+            }
+            seenRows.add(key);
+            return true;
+          },
         );
-        await sleep(100);
+
+        for (let i = 0; i < visibleButtons.length; i += updateAllConcurrency) {
+          let batch = visibleButtons.slice(i, i + updateAllConcurrency);
+          button.value = `Updating ${completed}/${seenRows.size}`;
+
+          await Promise.all(
+            batch.map((updateButton) =>
+              Promise.resolve(updatePrice(updateButton))
+                .catch((error) =>
+                  console.error(
+                    "[TornBazaarFiller] Failed to update row:",
+                    error,
+                  ),
+                )
+                .finally(() => {
+                  completed++;
+                  button.value = `Updating ${completed}/${seenRows.size}`;
+                }),
+            ),
+          );
+
+          if (i + updateAllConcurrency < visibleButtons.length) {
+            await sleep(updateAllBatchDelayMs);
+          }
+        }
+
+        let beforeScrollTop = getScrollTop(scrollContainer);
+        let maxScrollTop = getMaxScrollTop(scrollContainer);
+
+        if (beforeScrollTop >= maxScrollTop - 5) {
+          break;
+        }
+
+        scrollManageContainer(scrollContainer);
+        await sleep(updateAllScrollDelayMs);
+
+        let afterScrollTop = getScrollTop(scrollContainer);
+        idleScrolls = afterScrollTop <= beforeScrollTop + 5 ? idleScrolls + 1 : 0;
       }
 
+      setScrollTop(scrollContainer, initialScrollTop);
       button.value = "Update all prices";
     } finally {
       button.disabled = false;
@@ -292,6 +459,10 @@
       "div.price div.input-money-group",
     );
 
+    if (!moneyGroupDiv) {
+      return null;
+    }
+
     if (moneyGroupDiv.querySelector("span.overlay-percentage") === null) {
       const percentageSpan = document.createElement("span");
       percentageSpan.className = "overlay-percentage overlay-percentage-add";
@@ -303,6 +474,10 @@
 
   function insertPercentageManageSpan(element) {
     let moneyGroupDiv = element.querySelector("div.input-money-group");
+
+    if (!moneyGroupDiv) {
+      return null;
+    }
 
     if (moneyGroupDiv.querySelector("span.overlay-percentage") === null) {
       const percentageSpan = document.createElement("span");
@@ -348,8 +523,21 @@
   }
 
   function formatPriceDataset(result) {
-    if (!result || !result.filteredPrices) {
+    if (!result) {
       return "";
+    }
+
+    let marketBounds =
+      Number.isFinite(result.marketValue) && result.marketValue > 0
+        ? ` | market ${result.marketValue} | bounds ${result.marketMinPrice}-${result.marketMaxPrice}`
+        : "";
+    let clamp =
+      result.clampedToMarketBounds && result.rawLowBallPrice !== result.lowBallPrice
+        ? ` | clamped ${result.rawLowBallPrice}->${result.lowBallPrice}`
+        : "";
+
+    if (!result.filteredPrices) {
+      return `Market value pricing | fill ${result.lowBallPrice}${marketBounds}${clamp}`;
     }
 
     let prices = result.filteredPrices
@@ -372,7 +560,13 @@
         ? ` | ignored ${result.ignoredPrices.map(formatDatasetListing).join(", ")}`
         : "";
 
-    return `TornW3B rank pricing | used [${prices}${suffix}] | ${range} | ref ${Math.round(result.referencePrice)} | fill ${result.lowBallPrice}${ignored}`;
+    let sample =
+      Number.isFinite(result.sourceListingCount) &&
+      result.sourceListingCount > result.sampledListingCount
+        ? `sample first ${result.sampledListingCount}/${result.sourceListingCount}`
+        : `sample ${result.sampledListingCount}`;
+
+    return `TornW3B rank pricing | ${sample} | used [${prices}${suffix}] | ${range} | ref ${Math.round(result.referencePrice)} | fill ${result.lowBallPrice}${marketBounds}${clamp}${ignored}`;
   }
 
   function formatDatasetListing(listing) {
@@ -384,7 +578,10 @@
     if (!datasetSpan) return;
 
     let datasetText = formatPriceDataset(result);
-    datasetSpan.textContent = `data ${Math.round(result.referencePrice)} -> ${result.lowBallPrice}`;
+    let referencePrice = Number.isFinite(result.referencePrice)
+      ? result.referencePrice
+      : result.marketValue;
+    datasetSpan.textContent = `data ${Math.round(referencePrice)} -> ${result.lowBallPrice}`;
     datasetSpan.dataset.detail = datasetText;
     datasetSpan.title = datasetText;
   }
@@ -394,6 +591,11 @@
       element.parentElement.parentElement.parentElement.parentElement.parentElement.querySelector(
         "div.amount-main-wrap",
       );
+    if (!amountDiv) {
+      console.warn("[TornBazaarFiller] Amount container not found");
+      return;
+    }
+
     let priceInputs = amountDiv.querySelectorAll("div.price div input");
     let keyupEvent = new Event("keyup", { bubbles: true });
     let inputEvent = new Event("input", { bubbles: true });
@@ -402,14 +604,7 @@
       element.parentElement.parentElement.parentElement.parentElement.querySelector(
         "div.image-wrap img",
       );
-    let numberPattern = /\/(\d+)\//;
-    let match = image.src.match(numberPattern);
-    let extractedItemId = 0;
-    if (match) {
-      extractedItemId = parseInt(match[1], 10);
-    } else {
-      console.error("[TornBazaarFiller] ItemId not found!");
-    }
+    let extractedItemId = getItemIdFromImage(image);
 
     let wave =
       element.parentElement.parentElement.parentElement.querySelector(
@@ -433,9 +628,18 @@
         let isQuantityCheckbox =
           amountDiv.querySelector("div.amount.choice-container") !== null;
         if (isQuantityCheckbox) {
-          amountDiv.querySelector("div.amount.choice-container input").click();
+          let quantityCheckbox = amountDiv.querySelector(
+            "div.amount.choice-container input",
+          );
+          if (quantityCheckbox) {
+            quantityCheckbox.click();
+          }
         } else {
           let quantityInput = amountDiv.querySelector("div.amount input");
+          if (!quantityInput) {
+            console.warn("[TornBazaarFiller] Quantity input not found");
+            return;
+          }
           quantityInput.value = getQuantity(element, pageType);
           quantityInput.dispatchEvent(keyupEvent);
         }
@@ -446,9 +650,12 @@
         handlePricingError(error, wave);
       })
       .finally(() => {
-        element.parentNode.parentNode.parentNode.querySelector(
+        let clearButton = element.parentNode.parentNode.parentNode.querySelector(
           "span.btn-wrap.torn-bazaar-clear-qty-price span.btn",
-        ).style.display = "inline-block";
+        );
+        if (clearButton) {
+          clearButton.style.display = "inline-block";
+        }
       });
   }
 
@@ -461,11 +668,14 @@
           "[class*=menuActivators___] button[class*=iconContainer___][aria-label=Manage] span[class*=active___]",
         ) == null
       ) {
-        parentNode4
-          .querySelector(
-            "[class*=menuActivators___] button[class*=iconContainer___][aria-label=Manage]",
-          )
-          .click();
+        let manageButton = parentNode4.querySelector(
+          "[class*=menuActivators___] button[class*=iconContainer___][aria-label=Manage]",
+        );
+        if (!manageButton) {
+          console.warn("[TornBazaarFiller] Mobile manage button not found.");
+          return;
+        }
+        manageButton.click();
       }
       moneyGroupDiv = parentNode4.parentNode.querySelector(
         "[class*=bottomMobileMenu___] [class*=priceMobile___]",
@@ -482,6 +692,11 @@
           "div[class*=price___]",
         );
     }
+    if (!moneyGroupDiv) {
+      console.warn("[TornBazaarFiller] Price container not found.");
+      return;
+    }
+
     let priceInputs = moneyGroupDiv.querySelectorAll(
       "div.input-money-group input",
     );
@@ -531,6 +746,11 @@
       element.parentElement.parentElement.parentElement.parentElement.parentElement.querySelector(
         "div.amount-main-wrap",
       );
+    if (!amountDiv) {
+      console.warn("[TornBazaarFiller] Amount container not found");
+      return;
+    }
+
     let priceInputs = amountDiv.querySelectorAll("div.price div input");
     let keyupEvent = new Event("keyup", { bubbles: true });
     let inputEvent = new Event("input", { bubbles: true });
@@ -544,24 +764,37 @@
     let isQuantityCheckbox =
       amountDiv.querySelector("div.amount.choice-container") !== null;
     if (isQuantityCheckbox) {
-      amountDiv.querySelector("div.amount.choice-container input").click();
+      let quantityCheckbox = amountDiv.querySelector(
+        "div.amount.choice-container input",
+      );
+      if (quantityCheckbox) {
+        quantityCheckbox.click();
+      }
     } else {
       let quantityInput = amountDiv.querySelector("div.amount input");
-      quantityInput.value = "";
-      quantityInput.dispatchEvent(keyupEvent);
+      if (quantityInput) {
+        quantityInput.value = "";
+        quantityInput.dispatchEvent(keyupEvent);
+      }
     }
 
-    priceInputs[0].value = "";
-    priceInputs[1].value = "";
-    priceInputs[0].dispatchEvent(inputEvent);
+    priceInputs.forEach((input) => {
+      input.value = "";
+    });
+    if (priceInputs[0]) {
+      priceInputs[0].dispatchEvent(inputEvent);
+    }
 
     wave.style.animation = "none";
     wave.offsetHeight;
     wave.style.animation = null;
 
-    element.parentNode.parentNode.parentNode.querySelector(
+    let fillButton = element.parentNode.parentNode.parentNode.querySelector(
       "span.btn-wrap.torn-bazaar-fill-qty-price span.btn",
-    ).style.display = "inline-block";
+    );
+    if (fillButton) {
+      fillButton.style.display = "inline-block";
+    }
   }
 
   function getQuantity(element, pageType) {
@@ -571,13 +804,11 @@
     switch (pageType) {
       case pages.AddItems:
         quantityText = element.parentNode.parentNode.parentNode.innerText;
-        console.log("quantityText:", quantityText);
         break;
       case pages.ManageItems:
         quantityText =
-          element.parentNode.parentNode.parentNode.querySelector(
-            "span",
-          ).innerText;
+          element.parentNode.parentNode.parentNode.querySelector("span")
+            ?.innerText || "";
         break;
     }
     let match = isMobileView
@@ -588,13 +819,19 @@
   }
 
   function getItemIdFromImage(image) {
+    if (!image || !image.src) {
+      console.warn("[TornBazaarFiller] Item image not found");
+      return 0;
+    }
+
     let numberPattern = /\/(\d+)\//;
     let match = image.src.match(numberPattern);
     if (match) {
       return parseInt(match[1], 10);
-    } else {
-      console.error("[TornBazaarFiller] ItemId not found!");
     }
+
+    console.warn("[TornBazaarFiller] ItemId not found");
+    return 0;
   }
 
   function setPriceInputs(priceInputs, price, inputEvent) {
@@ -705,12 +942,44 @@
   function validateTornApiResponse(data) {
     if (data && data.error != null && data.error.code === 2) {
       apiKey = null;
-      localStorage.setItem("silmaril-torn-bazaar-filler-apikey", null);
+      localStorage.removeItem("silmaril-torn-bazaar-filler-apikey");
       let error = new Error("[TornBazaarFiller] Incorrect Api Key");
       error.apiKeyInvalid = true;
       error.data = data;
       throw error;
     }
+  }
+
+  function getMarketValue(itemId) {
+    let requestUrl = itemUrl
+      .replace("{itemId}", itemId)
+      .replace("{apiKey}", apiKey);
+
+    return fetchJson(requestUrl).then((data) => {
+      validateTornApiResponse(data);
+      let marketValue = Number(
+        data.items && data.items[itemId] && data.items[itemId].market_value,
+      );
+      if (!Number.isFinite(marketValue) || marketValue <= 0) {
+        throw new Error("[TornBazaarFiller] Market value not found");
+      }
+      return marketValue;
+    });
+  }
+
+  function clampPriceToMarketBounds(price, marketValue) {
+    let marketMinPrice = Math.ceil(marketValue * minimumMarketValueRatio);
+    let marketMaxPrice = Math.floor(marketValue * maximumMarketValueRatio);
+    let clampedPrice = Math.min(Math.max(price, marketMinPrice), marketMaxPrice);
+
+    return {
+      lowBallPrice: clampedPrice,
+      rawLowBallPrice: price,
+      marketValue,
+      marketMinPrice,
+      marketMaxPrice,
+      clampedToMarketBounds: clampedPrice !== price,
+    };
   }
 
   function normalizeItemMarketListings(data, itemId) {
@@ -891,37 +1160,33 @@
   }
 
   function calculatePrice(itemId) {
+    if (!Number.isFinite(itemId) || itemId <= 0) {
+      return Promise.reject(new Error("[TornBazaarFiller] Invalid item id"));
+    }
+
     let formula = parsePricingFormula();
 
     if (formula.source === "market") {
-      let requestUrl = itemUrl
-        .replace("{itemId}", itemId)
-        .replace("{apiKey}", apiKey);
-
-      return fetchJson(requestUrl).then((data) => {
-        validateTornApiResponse(data);
-        let price = Number(
-          data.items && data.items[itemId] && data.items[itemId].market_value,
-        );
-        if (!Number.isFinite(price) || price <= 0) {
-          throw new Error("[TornBazaarFiller] Market value not found");
-        }
-
+      return getMarketValue(itemId).then((price) => {
+        let rawLowBallPrice = calculateFinalPrice(price, formula.operation);
         return {
-          lowBallPrice: calculateFinalPrice(price, formula.operation),
+          ...clampPriceToMarketBounds(rawLowBallPrice, price),
           comparisonPrice: null,
           source: formula.source,
         };
       });
     }
 
-    return getListingsForPricing(itemId, formula.source).then((listings) => {
+    return Promise.all([
+      getListingsForPricing(itemId, formula.source),
+      getMarketValue(itemId),
+    ]).then(([listings, marketValue]) => {
       listings.sort((a, b) => a.price - b.price);
       let bazaarListings = listings.filter(
         (listing) => listing.source === "bazaar",
       );
-      let pricingListings =
-        bazaarListings.length > 0 ? bazaarListings : listings;
+      let sourceListings = bazaarListings.length > 0 ? bazaarListings : listings;
+      let pricingListings = sourceListings.slice(0, pricingListingLimit);
       let filteredResult = filterCheapOutliers(pricingListings);
       pricingListings = filteredResult.listings;
 
@@ -935,18 +1200,24 @@
       );
       let comparisonListing =
         pricingListings[Math.min(2, pricingListings.length - 1)];
+      let rawLowBallPrice = calculateFinalPrice(
+        referenceListing.price,
+        formula.operation,
+      );
 
       return {
-        lowBallPrice: calculateFinalPrice(
-          referenceListing.price,
-          formula.operation,
-        ),
+        ...clampPriceToMarketBounds(rawLowBallPrice, marketValue),
         comparisonPrice: comparisonListing.price,
         source: formula.source,
         referencePrice: referenceListing.price,
         referenceListing,
         filteredPrices: pricingListings,
         ignoredPrices: filteredResult.ignoredListings,
+        sourceListingCount: sourceListings.length,
+        sampledListingCount: Math.min(
+          sourceListings.length,
+          pricingListingLimit,
+        ),
       };
     });
   }
@@ -966,22 +1237,34 @@
     ).toFixed(0);
 
     if (priceCoefficient <= 95) {
-      percentageOverlaySpan.style.display = "block";
+      if (percentageOverlaySpan) {
+        percentageOverlaySpan.style.display = "block";
+      }
       if (priceCoefficient <= 50) {
-        percentageOverlaySpan.style.color = "red";
+        if (percentageOverlaySpan) {
+          percentageOverlaySpan.style.color = "red";
+        }
         wave.style.backgroundColor = "red";
         wave.style.animationDuration = "5s";
       } else if (priceCoefficient <= 75) {
-        percentageOverlaySpan.style.color = "yellow";
+        if (percentageOverlaySpan) {
+          percentageOverlaySpan.style.color = "yellow";
+        }
         wave.style.backgroundColor = "yellow";
         wave.style.animationDuration = "3s";
       } else {
-        percentageOverlaySpan.style.color = "green";
+        if (percentageOverlaySpan) {
+          percentageOverlaySpan.style.color = "green";
+        }
         wave.style.backgroundColor = "green";
       }
-      percentageOverlaySpan.innerText = priceCoefficient + "%";
+      if (percentageOverlaySpan) {
+        percentageOverlaySpan.innerText = priceCoefficient + "%";
+      }
     } else {
-      percentageOverlaySpan.style.display = "none";
+      if (percentageOverlaySpan) {
+        percentageOverlaySpan.style.display = "none";
+      }
       wave.style.backgroundColor = "green";
     }
   }
@@ -1045,17 +1328,27 @@
   }
 
   function checkApiKey(checkExisting = true) {
-    if (!checkExisting || apiKey === null || apiKey.length != 16) {
+    if (!checkExisting || !apiKey || apiKey.length !== 16) {
       let userInput = prompt(
         "Please enter a PUBLIC Api Key, it will be used to get current bazaar prices:",
-        apiKey ?? "",
+        apiKey && apiKey.length === 16 ? apiKey : "",
       );
-      if (userInput !== null && userInput.length == 16) {
-        apiKey = userInput;
-        localStorage.setItem("silmaril-torn-bazaar-filler-apikey", userInput);
+      let normalizedApiKey = userInput === null ? "" : userInput.trim();
+      if (normalizedApiKey.length === 16) {
+        apiKey = normalizedApiKey;
+        localStorage.setItem(
+          "silmaril-torn-bazaar-filler-apikey",
+          normalizedApiKey,
+        );
+        return true;
       } else {
+        apiKey = null;
+        localStorage.removeItem("silmaril-torn-bazaar-filler-apikey");
         console.error("[TornBazaarFiller] User cancelled the Api Key input.");
+        return false;
       }
     }
+
+    return true;
   }
 })();
